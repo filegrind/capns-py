@@ -110,6 +110,13 @@ class MessageId:
             return str(uuid_module.UUID(bytes=self.uuid_bytes))
         return None
 
+    def to_string(self) -> str:
+        """Convert to string representation (works for both UUID and uint)"""
+        if self.uuid_bytes is not None:
+            return str(uuid_module.UUID(bytes=self.uuid_bytes))
+        else:
+            return str(self.uint_value)
+
     def as_bytes(self) -> bytes:
         """Get as bytes for comparison"""
         if self.uuid_bytes is not None:
@@ -143,11 +150,14 @@ class MessageId:
         else:
             return hash(('uint', self.uint_value))
 
+    def __str__(self):
+        return self.to_string()
+
     def __repr__(self):
         if self.uuid_bytes is not None:
-            return f"MessageId::Uuid({self.to_uuid_string()})"
+            return f"MessageId::Uuid({self.to_string()})"
         else:
-            return f"MessageId::Uint({self.uint_value})"
+            return f"MessageId::Uint({self.to_string()})"
 
     @classmethod
     def default(cls) -> "MessageId":

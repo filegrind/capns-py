@@ -831,7 +831,7 @@ class PluginRuntime:
 
             elif frame.frame_type in (FrameType.RES, FrameType.CHUNK, FrameType.END):
                 # Response frames from host - route to pending peer request by frame.id
-                frame_id_str = frame.id.to_string() if hasattr(frame.id, 'to_string') else str(frame.id)
+                frame_id_str = frame.id.to_string()
                 with pending_lock:
                     if frame_id_str in pending_peer_requests:
                         pending_req = pending_peer_requests[frame_id_str]
@@ -851,7 +851,7 @@ class PluginRuntime:
 
             elif frame.frame_type == FrameType.ERR:
                 # Error frame from host - could be response to peer request
-                frame_id_str = frame.id.to_string() if hasattr(frame.id, 'to_string') else str(frame.id)
+                frame_id_str = frame.id.to_string()
                 with pending_lock:
                     if frame_id_str in pending_peer_requests:
                         pending_req = pending_peer_requests[frame_id_str]
