@@ -364,3 +364,235 @@ def test_cap_matrix_clear():
     registry.clear()
 
     assert len(registry.get_host_names()) == 0
+
+
+# =============================================================================
+# CapCube Tests (Multi-Registry Composite)
+# =============================================================================
+
+
+# TEST121: Test CapCube selects more specific cap over less specific regardless of registry order
+def test_cap_cube_more_specific_wins():
+    # This is the key test: provider has less specific cap, plugin has more specific
+    # The more specific one should win regardless of registry order
+
+    provider_registry = CapMatrix()
+    plugin_registry = CapMatrix()
+
+    # Provider: less specific cap
+    provider_host = MockCapSet("provider")
+    provider_cap = make_cap(
+        'cap:in="media:bytes";op=generate_thumbnail;out="media:bytes"',
+        "Provider Thumbnail Generator (generic)"
+    )
+    provider_registry.register_cap_set("provider", provider_host, [provider_cap])
+
+    # Plugin: more specific cap (has ext=pdf)
+    plugin_host = MockCapSet("plugin")
+    plugin_cap = make_cap(
+        'cap:ext=pdf;in="media:bytes";op=generate_thumbnail;out="media:bytes"',
+        "Plugin PDF Thumbnail Generator (specific)"
+    )
+    plugin_registry.register_cap_set("plugin", plugin_host, [plugin_cap])
+
+    # Create composite with provider first (normally would have priority on ties)
+    composite = CapCube()
+    composite.add_registry("providers", provider_registry)
+    composite.add_registry("plugins", plugin_registry)
+
+    # Request for PDF thumbnails - plugin's more specific cap should win
+    request = 'cap:ext=pdf;in="media:bytes";op=generate_thumbnail;out="media:bytes"'
+    best = composite.find_best_cap_set(request)
+
+    # Plugin registry has specificity 4 (in, op, out, ext)
+    # Provider registry has specificity 3 (in, op, out)
+    # Plugin should win even though providers were added first
+    assert best.registry_name == "plugins", "More specific plugin should win over less specific provider"
+    assert best.specificity == 4, "Plugin cap has 4 specific tags"
+    assert best.cap.title == "Plugin PDF Thumbnail Generator (specific)"
+
+
+# TEST122: Test CapCube breaks specificity ties by first registered registry
+def test_cap_cube_tie_goes_to_first():
+    # When specificity is equal, first registry wins
+
+    registry1 = CapMatrix()
+    registry2 = CapMatrix()
+
+    # Both have same specificity
+    host1 = MockCapSet("host1")
+    cap1 = make_cap(make_test_urn("ext=pdf;op=generate"), "Registry 1 Cap")
+    registry1.register_cap_set("host1", host1, [cap1])
+
+    host2 = MockCapSet("host2")
+    cap2 = make_cap(make_test_urn("ext=pdf;op=generate"), "Registry 2 Cap")
+    registry2.register_cap_set("host2", host2, [cap2])
+
+    composite = CapCube()
+    composite.add_registry("first", registry1)
+    composite.add_registry("second", registry2)
+
+    best = composite.find_best_cap_set(make_test_urn("ext=pdf;op=generate"))
+
+    # Both have same specificity, first registry should win
+    assert best.registry_name == "first", "On tie, first registry should win"
+    assert best.cap.title == "Registry 1 Cap"
+
+
+# TEST123: Test CapCube polls all registries to find most specific match
+def test_cap_cube_polls_all():
+    # Test that all registries are polled
+
+    registry1 = CapMatrix()
+    registry2 = CapMatrix()
+    registry3 = CapMatrix()
+
+    # Registry 1: doesn't match
+    host1 = MockCapSet("host1")
+    cap1 = make_cap(make_test_urn("op=different"), "Registry 1")
+    registry1.register_cap_set("host1", host1, [cap1])
+
+    # Registry 2: matches but less specific
+    host2 = MockCapSet("host2")
+    cap2 = make_cap(make_test_urn("op=generate"), "Registry 2")
+    registry2.register_cap_set("host2", host2, [cap2])
+
+    # Registry 3: matches and most specific
+    host3 = MockCapSet("host3")
+    cap3 = make_cap(make_test_urn("ext=pdf;format=thumbnail;op=generate"), "Registry 3")
+    registry3.register_cap_set("host3", host3, [cap3])
+
+    composite = CapCube()
+    composite.add_registry("r1", registry1)
+    composite.add_registry("r2", registry2)
+    composite.add_registry("r3", registry3)
+
+    best = composite.find_best_cap_set(make_test_urn("ext=pdf;format=thumbnail;op=generate"))
+
+    # Registry 3 has more specific tags
+    assert best.registry_name == "r3", "Most specific registry should win"
+
+
+# TEST124: Test CapCube returns error when no registries match the request
+def test_cap_cube_no_match():
+    registry = CapMatrix()
+
+    composite = CapCube()
+    composite.add_registry("empty", registry)
+
+    try:
+        composite.find_best_cap_set(make_test_urn("op=nonexistent"))
+        assert False, "Should have raised NoSetsFoundError"
+    except NoSetsFoundError:
+        pass  # Expected
+
+
+# TEST125: Test CapCube prefers specific plugin over generic provider fallback
+def test_cap_cube_fallback_scenario():
+    # Test the exact scenario from the user's issue:
+    # Provider: generic fallback (can handle any file type)
+    # Plugin:   PDF-specific handler
+    # Request:  PDF thumbnail
+    # Expected: Plugin wins (more specific)
+
+    provider_registry = CapMatrix()
+    plugin_registry = CapMatrix()
+
+    # Provider with generic fallback (can handle any file type)
+    provider_host = MockCapSet("provider_fallback")
+    provider_cap = make_cap(
+        'cap:in="media:bytes";op=generate_thumbnail;out="media:bytes"',
+        "Generic Thumbnail Provider"
+    )
+    provider_registry.register_cap_set("provider_fallback", provider_host, [provider_cap])
+
+    # Plugin with PDF-specific handler
+    plugin_host = MockCapSet("pdf_plugin")
+    plugin_cap = make_cap(
+        'cap:ext=pdf;in="media:bytes";op=generate_thumbnail;out="media:bytes"',
+        "PDF Thumbnail Plugin"
+    )
+    plugin_registry.register_cap_set("pdf_plugin", plugin_host, [plugin_cap])
+
+    # Providers first (would win on tie)
+    composite = CapCube()
+    composite.add_registry("providers", provider_registry)
+    composite.add_registry("plugins", plugin_registry)
+
+    # Request for PDF thumbnail
+    request = 'cap:ext=pdf;in="media:bytes";op=generate_thumbnail;out="media:bytes"'
+    best = composite.find_best_cap_set(request)
+
+    # Plugin (specificity 4) should beat provider (specificity 3)
+    assert best.registry_name == "plugins"
+
+
+# TEST126: Test CapCube can_handle method checks if any registry can handle the capability
+def test_cap_cube_can_handle():
+    # Test the can_handle() method
+
+    provider_registry = CapMatrix()
+
+    provider_host = MockCapSet("test_provider")
+    provider_cap = make_cap(
+        make_test_urn("ext=pdf;op=generate"),
+        "Test Provider"
+    )
+    provider_registry.register_cap_set("test_provider", provider_host, [provider_cap])
+
+    composite = CapCube()
+    composite.add_registry("providers", provider_registry)
+
+    # Test can_handle
+    assert composite.can_handle(make_test_urn("ext=pdf;op=generate"))
+    assert not composite.can_handle(make_test_urn("op=nonexistent"))
+
+
+# TEST133: Test CapCube graph integration with multiple registries and conversion paths
+def test_cap_cube_graph_integration():
+    # Test that CapCube.graph() works correctly
+
+    provider_registry = CapMatrix()
+    plugin_registry = CapMatrix()
+
+    # Provider: binary -> str
+    provider_host = MockCapSet("provider")
+    provider_cap = Cap(
+        urn=CapUrn.from_string('cap:in="media:bytes";op=extract;out="media:textable;form=scalar"'),
+        title="Provider Text Extractor",
+        command="extract"
+    )
+    provider_cap.output = CapOutput("media:textable;form=scalar", "output")
+    provider_registry.register_cap_set("provider", provider_host, [provider_cap])
+
+    # Plugin: str -> obj
+    plugin_host = MockCapSet("plugin")
+    plugin_cap = Cap(
+        urn=CapUrn.from_string('cap:in="media:textable;form=scalar";op=parse;out="media:form=map;textable"'),
+        title="Plugin JSON Parser",
+        command="parse"
+    )
+    plugin_cap.output = CapOutput("media:form=map;textable", "output")
+    plugin_registry.register_cap_set("plugin", plugin_host, [plugin_cap])
+
+    cube = CapCube()
+    cube.add_registry("providers", provider_registry)
+    cube.add_registry("plugins", plugin_registry)
+
+    # Build graph
+    graph = cube.graph()
+
+    # Check nodes (exact spec strings - alphabetically canonicalized)
+    nodes = graph.get_nodes()
+    assert 'media:bytes' in nodes
+    assert 'media:textable;form=scalar' in nodes  # Canonicalized (alphabetical)
+    assert 'media:form=map;textable' in nodes  # Canonicalized (alphabetical)
+
+    # Check edges
+    edges = graph.get_edges()
+    assert len(edges) == 2
+
+    # Check that we have appropriate edges
+    edge_pairs = [(e.from_spec, e.to_spec) for e in edges]
+    assert any('bytes' in from_spec and ('scalar' in to_spec or 'textable' in to_spec) for from_spec, to_spec in edge_pairs)
+    assert any(('scalar' in from_spec or 'textable' in from_spec) and 'map' in to_spec for from_spec, to_spec in edge_pairs)
