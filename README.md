@@ -81,15 +81,27 @@ pytest --cov=capns tests/
 
 The implementation includes comprehensive tests covering:
 
-#### CapUrn Tests (TEST001-TEST052)
+#### CapUrn Tests (TEST001-TEST052) - 52 tests ✅
 - TEST001-TEST039: Core CapUrn functionality, parsing, serialization, matching
 - TEST040-TEST052: Advanced matching semantics and direction handling
 
-#### MediaUrn Tests (TEST057-TEST078, TEST304-TEST306)
+#### MediaUrn Tests (TEST057-TEST078, TEST304-TEST306) - 25 tests ✅
 - TEST057-TEST078: MediaUrn parsing, type checking, matching, specificity
 - TEST304-TEST306: Additional media URN constant validation
 
-**Total: 77 passing tests**
+#### Cap Tests (TEST108-TEST116) - 9 tests ✅
+- TEST108-TEST116: Cap creation, arguments, stdin, output, metadata, serialization
+
+#### Manifest Tests (TEST148-TEST155) - 8 tests ✅
+- TEST148-TEST155: Manifest creation, serialization, multiple caps, optional fields
+
+#### Response Tests (TEST168-TEST170) - 3 tests ✅
+- TEST168-TEST170: Response wrapper for JSON, primitives, and binary data
+
+#### Standard Caps Tests (TEST307-TEST312) - 6 tests ✅
+- TEST307-TEST312: Standard URN builders for capabilities
+
+**Total: 103/308 passing tests (33% complete)**
 
 ## Architecture
 

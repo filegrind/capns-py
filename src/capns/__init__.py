@@ -74,6 +74,38 @@ from capns.cap_urn import (
     CapUrnBuilder,
 )
 
+from capns.response import ResponseWrapper
+
+from capns.cap import Cap, CapArg, CapOutput, StdinSource, PositionSource, CliFlagSource, MediaSpecDef
+from capns.manifest import CapManifest
+
+from capns.validation import (
+    validate_cap_args,
+    validate_positional_arguments,
+    ValidationError,
+    MissingRequiredArgumentError,
+    InvalidArgumentTypeError,
+    TooManyArgumentsError,
+    InvalidCapSchemaError,
+    MediaSpecValidationError,
+    RESERVED_CLI_FLAGS,
+)
+
+from capns.schema_validation import (
+    SchemaValidator,
+    SchemaValidationError,
+    SchemaCompilationError,
+    ArgumentValidationError,
+    OutputValidationError,
+    MediaUrnNotResolvedError,
+)
+
+from capns.standard.caps import (
+    model_availability_urn,
+    model_path_urn,
+    llm_conversation_urn,
+)
+
 __all__ = [
     # MediaUrn
     "MediaUrn",
@@ -140,4 +172,37 @@ __all__ = [
     "CapUrn",
     "CapUrnError",
     "CapUrnBuilder",
+    # Response
+    "ResponseWrapper",
+    # Cap
+    "Cap",
+    "CapArg",
+    "CapOutput",
+    "StdinSource",
+    "PositionSource",
+    "CliFlagSource",
+    "MediaSpecDef",
+    # Manifest
+    "CapManifest",
+    # Validation
+    "validate_cap_args",
+    "validate_positional_arguments",
+    "ValidationError",
+    "MissingRequiredArgumentError",
+    "InvalidArgumentTypeError",
+    "TooManyArgumentsError",
+    "InvalidCapSchemaError",
+    "MediaSpecValidationError",
+    "RESERVED_CLI_FLAGS",
+    # Schema validation
+    "SchemaValidator",
+    "SchemaValidationError",
+    "SchemaCompilationError",
+    "ArgumentValidationError",
+    "OutputValidationError",
+    "MediaUrnNotResolvedError",
+    # Standard caps
+    "model_availability_urn",
+    "model_path_urn",
+    "llm_conversation_urn",
 ]
