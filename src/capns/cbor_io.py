@@ -505,3 +505,156 @@ def handshake_accept(
     writer.set_limits(limits)
 
     return limits
+
+
+# =============================================================================
+# Async I/O - for AsyncPluginHost
+# =============================================================================
+
+
+class AsyncFrameReader:
+    """Async frame reader for reading CBOR frames from an async stream"""
+
+    def __init__(self, stream):
+        """Create async frame reader
+
+        Args:
+            stream: Async readable stream (asyncio.StreamReader or similar)
+        """
+        self.stream = stream
+        self.limits = Limits(max_frame=DEFAULT_MAX_FRAME, max_chunk=DEFAULT_MAX_CHUNK)
+
+    def set_limits(self, limits: Limits):
+        """Update frame size limits"""
+        self.limits = limits
+
+    async def read(self) -> Optional[Frame]:
+        """Read one frame from the stream
+
+        Returns:
+            Frame if read successfully, None on EOF
+
+        Raises:
+            CborError: If read fails
+        """
+        # Read 4-byte length prefix
+        try:
+            length_bytes = await self.stream.readexactly(4)
+        except asyncio.IncompleteReadError:
+            return None  # EOF
+        except Exception as e:
+            raise UnexpectedEofError(f"Failed to read length prefix: {e}")
+
+        frame_len = int.from_bytes(length_bytes, byteorder='big')
+
+        # Check against limits
+        if frame_len > self.limits.max_frame:
+            raise FrameTooLargeError(frame_len, self.limits.max_frame)
+
+        # Read frame data
+        try:
+            frame_data = await self.stream.readexactly(frame_len)
+        except asyncio.IncompleteReadError:
+            raise UnexpectedEofError("Incomplete frame data")
+        except Exception as e:
+            raise CborError(f"Failed to read frame data: {e}")
+
+        # Decode frame
+        return decode_frame(frame_data)
+
+
+class AsyncFrameWriter:
+    """Async frame writer for writing CBOR frames to an async stream"""
+
+    def __init__(self, stream):
+        """Create async frame writer
+
+        Args:
+            stream: Async writable stream (asyncio.StreamWriter or similar)
+        """
+        self.stream = stream
+        self.limits = Limits(max_frame=DEFAULT_MAX_FRAME, max_chunk=DEFAULT_MAX_CHUNK)
+
+    def set_limits(self, limits: Limits):
+        """Update frame size limits"""
+        self.limits = limits
+
+    async def write(self, frame: Frame):
+        """Write one frame to the stream
+
+        Args:
+            frame: Frame to write
+
+        Raises:
+            CborError: If write fails
+        """
+        # Encode frame
+        frame_data = encode_frame(frame)
+        frame_len = len(frame_data)
+
+        # Check against limits
+        if frame_len > self.limits.max_frame:
+            raise FrameTooLargeError(frame_len, self.limits.max_frame)
+
+        # Write length prefix + frame data
+        length_bytes = frame_len.to_bytes(4, byteorder='big')
+        self.stream.write(length_bytes + frame_data)
+        await self.stream.drain()
+
+
+@dataclass
+class HandshakeResult:
+    """Result of handshake"""
+    limits: Limits
+    manifest: bytes
+
+
+async def handshake_async(
+    reader: AsyncFrameReader,
+    writer: AsyncFrameWriter,
+) -> HandshakeResult:
+    """Perform HELLO handshake (host side - sends first, expects manifest in response)
+
+    Sends host's HELLO, reads plugin's HELLO with manifest, returns negotiated limits and manifest.
+
+    Args:
+        reader: Async frame reader
+        writer: Async frame writer
+
+    Returns:
+        HandshakeResult with limits and manifest
+
+    Raises:
+        HandshakeError: If handshake fails
+    """
+    # Send our HELLO
+    our_hello = Frame.hello(DEFAULT_MAX_FRAME, DEFAULT_MAX_CHUNK)
+    await writer.write(our_hello)
+
+    # Read their HELLO (should include manifest)
+    their_frame = await reader.read()
+    if their_frame is None:
+        raise HandshakeError("connection closed before receiving HELLO")
+
+    if their_frame.frame_type != FrameType.HELLO:
+        raise HandshakeError(f"expected HELLO, got {their_frame.frame_type}")
+
+    # Extract manifest - REQUIRED for plugins
+    manifest = their_frame.hello_manifest()
+    if manifest is None:
+        raise HandshakeError("Plugin HELLO missing required manifest")
+
+    # Negotiate minimum of both
+    their_max_frame = their_frame.hello_max_frame() or DEFAULT_MAX_FRAME
+    their_max_chunk = their_frame.hello_max_chunk() or DEFAULT_MAX_CHUNK
+
+    limits = Limits(
+        max_frame=min(DEFAULT_MAX_FRAME, their_max_frame),
+        max_chunk=min(DEFAULT_MAX_CHUNK, their_max_chunk),
+    )
+
+    # Update both reader and writer with negotiated limits
+    reader.set_limits(limits)
+    writer.set_limits(limits)
+
+    return HandshakeResult(limits=limits, manifest=bytes(manifest))
