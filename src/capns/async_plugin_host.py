@@ -203,6 +203,7 @@ class HostState:
         self.pending: Dict[MessageId, asyncio.Queue] = {}
         self.pending_heartbeats: set = set()
         self.closed: bool = False
+        self.capabilities: Dict[str, callable] = {}  # cap_urn -> async handler function
 
 
 class AsyncPluginHost:
@@ -221,8 +222,8 @@ class AsyncPluginHost:
         writer_task: asyncio.Task,
     ):
         """Internal constructor - use new() instead"""
-        self.writer_queue = writer_queue
-        self.state = state
+        self._writer_queue = writer_queue
+        self._state = state
         self.limits = limits
         self.plugin_manifest = plugin_manifest
         self.reader_task = reader_task
@@ -311,6 +312,14 @@ class AsyncPluginHost:
                         state.pending_heartbeats.discard(frame.id)
                     continue
 
+                # Handle incoming REQ frames (peer invocations from plugin)
+                if frame.frame_type == FrameType.REQ and frame.id not in state.pending:
+                    # This is a peer invocation - plugin is calling a host capability
+                    asyncio.create_task(
+                        AsyncPluginHost._handle_peer_request(frame, state, writer_queue)
+                    )
+                    continue
+
                 # Route frame to appropriate pending request
                 if frame.id in state.pending:
                     queue = state.pending[frame.id]
@@ -396,7 +405,7 @@ class AsyncPluginHost:
             Closed: If host is closed
             SendError: If send fails
         """
-        if self.state.closed:
+        if self._state.closed:
             raise Closed()
 
         request_id = MessageId.new_uuid()
@@ -404,11 +413,11 @@ class AsyncPluginHost:
 
         # Create queue for responses
         queue = asyncio.Queue(maxsize=32)
-        self.state.pending[request_id] = queue
+        self._state.pending[request_id] = queue
 
         # Send request
         try:
-            await self.writer_queue.put(WriteFrame(request))
+            await self._writer_queue.put(WriteFrame(request))
         except:
             raise SendError()
 
@@ -495,18 +504,18 @@ class AsyncPluginHost:
             Closed: If host is closed
             SendError: If send fails
         """
-        if self.state.closed:
+        if self._state.closed:
             raise Closed()
 
         heartbeat_id = MessageId.new_uuid()
         heartbeat = Frame.heartbeat(heartbeat_id)
 
         # Track this heartbeat
-        self.state.pending_heartbeats.add(heartbeat_id)
+        self._state.pending_heartbeats.add(heartbeat_id)
 
         # Send heartbeat
         try:
-            await self.writer_queue.put(WriteFrame(heartbeat))
+            await self._writer_queue.put(WriteFrame(heartbeat))
         except:
             raise SendError()
 
@@ -517,19 +526,109 @@ class AsyncPluginHost:
                 timeout=5.0
             )
         except asyncio.TimeoutError:
-            self.state.pending_heartbeats.discard(heartbeat_id)
+            self._state.pending_heartbeats.discard(heartbeat_id)
             raise AsyncHostError("Heartbeat timeout")
 
     async def _wait_for_heartbeat_response(self, heartbeat_id: MessageId):
         """Wait for heartbeat response"""
-        while heartbeat_id in self.state.pending_heartbeats:
+        while heartbeat_id in self._state.pending_heartbeats:
             await asyncio.sleep(0.01)
+
+    def register_capability(self, cap_urn: str, handler):
+        """Register a host-side capability that the plugin can invoke via PeerInvoker.
+
+        Args:
+            cap_urn: Capability URN (wildcards supported in matching)
+            handler: Async function that takes (bytes) and returns bytes
+        """
+        self._state.capabilities[cap_urn] = handler
+
+    @staticmethod
+    async def _handle_peer_request(frame, state, writer_queue):
+        """Handle an incoming REQ frame from the plugin (peer invocation).
+
+        Args:
+            frame: The REQ frame from the plugin
+            state: HostState with registered capabilities
+            writer_queue: Queue for sending response frames
+        """
+        try:
+            cap_urn = frame.cap
+
+            # Find matching handler
+            handler = None
+            for registered_urn, registered_handler in state.capabilities.items():
+                # Simple wildcard matching: cap:in=*;op=X;out=* matches any in/out
+                # Match on operation name
+                if "op=" in cap_urn and "op=" in registered_urn:
+                    cap_op = cap_urn.split("op=")[1].split(";")[0]
+                    reg_op = registered_urn.split("op=")[1].split(";")[0]
+                    if cap_op == reg_op:
+                        handler = registered_handler
+                        break
+
+            if handler is None:
+                # No handler found - send ERR frame
+                err_frame = Frame.err(
+                    frame.id,
+                    "NO_HANDLER",
+                    f"No handler registered for capability: {cap_urn}"
+                )
+                await writer_queue.put(WriteFrame(err_frame))
+                return
+
+            # Execute handler
+            try:
+                # Decode the payload - PeerInvoker sends arguments as CBOR array of {value, media_urn}
+                import cbor2
+                payload = frame.payload or b""
+
+                # Try to decode as CBOR array of arguments
+                try:
+                    args = cbor2.loads(payload)
+                    if isinstance(args, list) and len(args) > 0:
+                        # First argument's value
+                        arg = args[0]
+                        if isinstance(arg, dict) and "value" in arg:
+                            payload = arg["value"]
+                            if isinstance(payload, str):
+                                payload = payload.encode()
+                except:
+                    # Not CBOR args format, use as-is
+                    pass
+
+                result = await handler(payload)
+
+                # Send RES frame with result
+                res_frame = Frame.res(frame.id, result, frame.content_type or "media:bytes")
+                await writer_queue.put(WriteFrame(res_frame))
+
+            except Exception as e:
+                # Handler error - send ERR frame
+                err_frame = Frame.err(
+                    frame.id,
+                    "HANDLER_ERROR",
+                    str(e)
+                )
+                await writer_queue.put(WriteFrame(err_frame))
+
+        except Exception as e:
+            # Protocol error - send ERR frame
+            try:
+                err_frame = Frame.err(
+                    frame.id,
+                    "PROTOCOL_ERROR",
+                    str(e)
+                )
+                await writer_queue.put(WriteFrame(err_frame))
+            except:
+                pass  # Best effort
 
     async def shutdown(self):
         """Shutdown the host and clean up resources"""
         # Send shutdown to writer
         try:
-            await self.writer_queue.put(Shutdown())
+            await self._writer_queue.put(Shutdown())
         except:
             pass
 
