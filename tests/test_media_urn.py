@@ -231,25 +231,29 @@ def test_extension_helpers():
 
 # TEST074: Test media URN matching using tagged URN semantics with specific and generic requirements
 def test_media_urn_matching():
-    # Generic handler (just bytes) matches specific request (pdf;bytes)
-    generic = MediaUrn.from_string("media:bytes")
-    specific = MediaUrn.from_string("media:pdf;bytes")
-    assert generic.matches(specific), "Generic bytes should match specific pdf;bytes"
+    # Generic handler (just bytes) can handle specific request (pdf;bytes)
+    # Semantics: request.matches(handler) checks if request satisfies handler's requirement
+    generic_handler = MediaUrn.from_string("media:bytes")
+    specific_request = MediaUrn.from_string("media:pdf;bytes")
+    # Specific request (pdf;bytes) satisfies generic handler requirement (bytes)
+    assert specific_request.matches(generic_handler), "Specific pdf;bytes request should satisfy generic bytes handler"
 
-    # Reverse: specific handler does NOT match generic request
-    assert not specific.matches(generic), "Specific pdf;bytes should NOT match generic bytes request"
+    # Reverse: generic request does NOT satisfy specific handler requirement
+    # Generic request (just bytes) does NOT satisfy specific handler requirement (pdf;bytes)
+    assert not generic_handler.matches(specific_request), "Generic bytes request should NOT satisfy specific pdf;bytes handler"
 
 
 # TEST075: Test matching with implicit wildcards where handlers with fewer tags can handle more requests
 def test_matching_implicit_wildcards():
     # Handler with no form tag can handle any form
-    generic = MediaUrn.from_string("media:textable")
-    specific_scalar = MediaUrn.from_string("media:textable;form=scalar")
-    specific_list = MediaUrn.from_string("media:textable;form=list")
+    # Semantics: request.matches(handler)
+    generic_handler = MediaUrn.from_string("media:textable")
+    specific_scalar_request = MediaUrn.from_string("media:textable;form=scalar")
+    specific_list_request = MediaUrn.from_string("media:textable;form=list")
 
-    # Generic (missing form tag) can handle both
-    assert generic.matches(specific_scalar)
-    assert generic.matches(specific_list)
+    # Specific requests satisfy generic handler (missing tags are wildcards)
+    assert specific_scalar_request.matches(generic_handler)
+    assert specific_list_request.matches(generic_handler)
 
 
 # TEST076: Test specificity increases with more tags for ranking matches
@@ -275,15 +279,17 @@ def test_string_roundtrip():
 
 # TEST078: Debug test for matching behavior between different media URN types
 def test_matching_debug():
-    # bytes should match pdf;bytes (generic matches specific)
-    bytes_urn = MediaUrn.from_string("media:bytes")
-    pdf_urn = MediaUrn.from_string("media:pdf;bytes")
-    assert bytes_urn.matches(pdf_urn)
+    # pdf;bytes request satisfies bytes handler requirement (specific matches generic)
+    bytes_handler = MediaUrn.from_string("media:bytes")
+    pdf_request = MediaUrn.from_string("media:pdf;bytes")
+    assert pdf_request.matches(bytes_handler)
 
-    # pdf;bytes should NOT match epub;bytes (different primary markers)
+    # pdf;bytes and epub;bytes are incompatible (different primary markers)
     epub_urn = MediaUrn.from_string("media:epub;bytes")
-    assert not pdf_urn.matches(epub_urn)
-    assert not epub_urn.matches(pdf_urn)
+    # pdf request does NOT satisfy epub handler (missing epub tag)
+    assert not pdf_request.matches(epub_urn)
+    # epub request does NOT satisfy pdf handler (missing pdf tag)
+    assert not epub_urn.matches(pdf_request)
 
 
 # TEST304: Test MEDIA_AVAILABILITY_OUTPUT constant parses as valid media URN with correct tags
