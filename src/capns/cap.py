@@ -286,6 +286,10 @@ class Cap:
         """Set metadata value"""
         self.metadata[key] = value
 
+    def accepts_stdin(self) -> bool:
+        """Check if this cap accepts stdin input"""
+        return self.get_stdin_media_urn() is not None
+
     def get_stdin_media_urn(self) -> Optional[str]:
         """Get stdin media URN if any arg uses stdin source"""
         for arg in self.args:

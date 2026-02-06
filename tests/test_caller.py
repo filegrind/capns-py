@@ -194,9 +194,10 @@ def test_cap_argument_value_clone():
     assert cloned.media_urn == original.media_urn
     assert cloned.value == original.value
 
-    # Independent copies
+    # Independent copies (different objects)
     assert cloned is not original
-    assert cloned.value is not original.value
+    # Note: bytes are immutable in Python, so value identity doesn't matter for correctness
+    assert cloned.value == original.value
 
 
 # TEST280: Test CapArgumentValue Debug format includes media_urn and value

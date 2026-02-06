@@ -101,7 +101,21 @@ The implementation includes comprehensive tests covering:
 #### Standard Caps Tests (TEST307-TEST312) - 6 tests ✅
 - TEST307-TEST312: Standard URN builders for capabilities
 
-**Total: 103/308 passing tests (33% complete)**
+#### Validation Tests (TEST051-056) - 14 tests ✅
+- TEST051-056: Input validation, argument checking, validation rules
+- RULE1-RULE10: Comprehensive validation rule enforcement
+
+#### Schema Validation Tests (TEST163-167) - 10 tests ✅
+- TEST163-167: JSON schema validation for arguments and outputs
+
+#### Caller Tests (TEST156-162, TEST274-283) - 21 tests ✅
+- TEST156-162: StdinSource variants and debugging
+- TEST274-283: CapArgumentValue creation and handling
+
+#### Registry Tests (TEST135-147) - 17 tests ✅
+- TEST135-147: Registry creation, caching, URL encoding, configuration
+
+**Total: 165/308 passing tests (54% complete)**
 
 ## Architecture
 

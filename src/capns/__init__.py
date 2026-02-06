@@ -100,6 +100,25 @@ from capns.schema_validation import (
     MediaUrnNotResolvedError,
 )
 
+from capns.caller import (
+    StdinSourceData,
+    StdinSourceFileReference,
+    CapArgumentValue,
+    CapSet,
+    CapCaller,
+)
+
+from capns.registry import (
+    CapRegistry,
+    RegistryConfig,
+    RegistryError,
+    HttpError,
+    NotFoundError,
+    ParseError,
+    CacheError,
+    normalize_cap_urn,
+)
+
 from capns.standard.caps import (
     model_availability_urn,
     model_path_urn,
@@ -201,6 +220,21 @@ __all__ = [
     "ArgumentValidationError",
     "OutputValidationError",
     "MediaUrnNotResolvedError",
+    # Caller
+    "StdinSourceData",
+    "StdinSourceFileReference",
+    "CapArgumentValue",
+    "CapSet",
+    "CapCaller",
+    # Registry
+    "CapRegistry",
+    "RegistryConfig",
+    "RegistryError",
+    "HttpError",
+    "NotFoundError",
+    "ParseError",
+    "CacheError",
+    "normalize_cap_urn",
     # Standard caps
     "model_availability_urn",
     "model_path_urn",
