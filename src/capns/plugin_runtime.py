@@ -766,6 +766,7 @@ class PluginRuntime:
                 raw_payload = frame.payload if frame.payload is not None else b""
                 content_type = frame.content_type
                 cap_urn_clone = cap_urn
+                max_chunk = self.limits.max_chunk
 
                 # Spawn handler in separate thread - main loop continues immediately
                 def handler_thread():
@@ -792,19 +793,47 @@ class PluginRuntime:
                                 print(f"[PluginRuntime] Failed to write error response: {write_err}", file=sys.stderr)
                         return
 
+                    # Execute handler and send response with automatic chunking
                     try:
                         result = handler(payload, emitter, peer_invoker)
-                        # Write final response (END)
-                        response_frame = Frame.end(request_id, result)
+
+                        # Automatic chunking: split large payloads into CHUNK frames
+                        with writer_lock:
+                            try:
+                                if len(result) <= max_chunk:
+                                    # Small payload: send single END frame
+                                    end_frame = Frame.end(request_id, result)
+                                    writer.write(end_frame)
+                                else:
+                                    # Large payload: send CHUNK frames + final END
+                                    offset = 0
+                                    seq = 0
+
+                                    while offset < len(result):
+                                        remaining = len(result) - offset
+                                        chunk_size = min(remaining, max_chunk)
+                                        chunk_data = result[offset:offset + chunk_size]
+                                        offset += chunk_size
+
+                                        if offset < len(result):
+                                            # Not the last chunk - send CHUNK frame
+                                            chunk_frame = Frame.chunk(request_id, seq, chunk_data)
+                                            writer.write(chunk_frame)
+                                            seq += 1
+                                        else:
+                                            # Last chunk - send END frame with remaining data
+                                            end_frame = Frame.end(request_id, chunk_data)
+                                            writer.write(end_frame)
+                            except Exception as e:
+                                print(f"[PluginRuntime] Failed to write response: {e}", file=sys.stderr)
                     except Exception as e:
                         # Handler error
-                        response_frame = Frame.err(request_id, "HANDLER_ERROR", str(e))
-
-                    with writer_lock:
-                        try:
-                            writer.write(response_frame)
-                        except Exception as e:
-                            print(f"[PluginRuntime] Failed to write response: {e}", file=sys.stderr)
+                        err_frame = Frame.err(request_id, "HANDLER_ERROR", str(e))
+                        with writer_lock:
+                            try:
+                                writer.write(err_frame)
+                            except Exception as write_err:
+                                print(f"[PluginRuntime] Failed to write error response: {write_err}", file=sys.stderr)
 
                 thread = threading.Thread(target=handler_thread, daemon=True)
                 thread.start()

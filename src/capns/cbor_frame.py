@@ -41,8 +41,9 @@ from dataclasses import dataclass
 # Protocol version. Always 1 for this implementation.
 PROTOCOL_VERSION = 1
 
-# Default maximum frame size (2 MB) - allows 1MB payloads with CBOR overhead
-DEFAULT_MAX_FRAME = 2_097_152
+# Default maximum frame size (3.5 MB) - safe margin below 3.75MB limit
+# Larger payloads automatically use CHUNK frames
+DEFAULT_MAX_FRAME = 3_670_016
 
 # Default maximum chunk size (256 KB)
 DEFAULT_MAX_CHUNK = 262_144
