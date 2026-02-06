@@ -53,10 +53,10 @@ import cbor2
 from .cbor_frame import Frame, FrameType, Limits, MessageId, DEFAULT_MAX_FRAME, DEFAULT_MAX_CHUNK
 from .cbor_io import handshake_accept, FrameReader, FrameWriter, CborError
 from .caller import CapArgumentValue
-from .cap import ArgSource, Cap, CapArg
+from .cap import ArgSource, Cap, CapArg, CliFlagSource
 from .cap_urn import CapUrn
 from .manifest import CapManifest
-from .media_urn import MediaUrn
+from .media_urn import MediaUrn, MediaUrnError
 
 
 class RuntimeError(Exception):
@@ -906,52 +906,59 @@ class PluginRuntime:
 
     def build_payload_from_cli(self, cap: Cap, cli_args: List[str]) -> bytes:
         """Build payload from CLI arguments based on cap's arg definitions."""
-        arguments: List[CapArgumentValue] = []
-
         # Check for stdin data if cap accepts stdin
         stdin_data = None
         if cap.accepts_stdin():
             stdin_data = self.read_stdin_if_available()
 
-        # Process each cap argument
-        for arg_def in cap.get_args():
-            value = self.extract_arg_value(arg_def, cli_args, stdin_data)
-
-            if value is not None:
-                arguments.append(CapArgumentValue(
-                    media_urn=arg_def.media_urn,
-                    value=value
-                ))
-            elif arg_def.required:
-                raise MissingArgumentError(f"Required argument '{arg_def.media_urn}' not provided")
-
         # If no arguments are defined but stdin data exists, use it as raw payload
         if not cap.get_args() and stdin_data is not None:
             return stdin_data
 
-        # If we have structured arguments, serialize as JSON
-        if arguments:
-            # Build a JSON object from the arguments
-            json_obj = {}
-            for arg in arguments:
-                # Try to parse value as JSON first, fall back to string
+        # Build JSON object directly from cap arg definitions
+        json_obj = {}
+        for arg_def in cap.get_args():
+            value = self.extract_arg_value(arg_def, cli_args, stdin_data)
+
+            if value is None:
+                if arg_def.required:
+                    raise MissingArgumentError(f"Required argument '{arg_def.media_urn}' not provided")
+                continue
+
+            # Validate media URN
+            try:
+                MediaUrn.from_string(arg_def.media_urn)
+            except MediaUrnError as e:
+                raise CliError(f"Invalid media URN '{arg_def.media_urn}': {e}")
+
+            # Parse value as JSON or string
+            try:
+                parsed_value = json.loads(value)
+            except Exception:
                 try:
-                    value = json.loads(arg.value)
-                except Exception:
-                    try:
-                        value = arg.value.decode('utf-8')
-                    except UnicodeDecodeError:
-                        # Binary data - keep as raw bytes
-                        raise CliError("Binary data cannot be passed via CLI flags. Use stdin instead.")
+                    parsed_value = value.decode('utf-8')
+                except UnicodeDecodeError:
+                    raise CliError("Binary data cannot be passed via CLI flags. Use stdin instead.")
 
-                # Use the last part of media_urn as key (e.g., "model-spec" from "media:model-spec;...")
-                key = arg.media_urn.removeprefix("media:").split(';')[0].replace('-', '_')
-                json_obj[key] = value
+            # Extract CLI flag name from sources to use as JSON key
+            cli_flag_key = None
+            for source in arg_def.sources:
+                if isinstance(source, CliFlagSource):
+                    # Strip leading dashes and convert to valid JSON key
+                    cli_flag_key = source.cli_flag.lstrip('-').replace('-', '_')
+                    break
 
-            return json.dumps(json_obj).encode('utf-8')
-        else:
-            # No arguments, no stdin - return empty object
+            if cli_flag_key is None:
+                # No CLI flag source - this shouldn't happen in CLI mode but fail gracefully
+                raise CliError(f"Argument '{arg_def.media_urn}' has no CLI flag source")
+
+            json_obj[cli_flag_key] = parsed_value
+
+        if not json_obj:
+            # No arguments - return empty object
             return b'{}'
+
+        return json.dumps(json_obj).encode('utf-8')
 
     def extract_arg_value(
         self,

@@ -25,30 +25,6 @@ from capns import (
 )
 
 
-# TEST057: Test parsing simple media URN verifies correct structure with no version, subtype, or profile
-def test_parsing_simple_media_urn():
-    urn = MediaUrn.from_string("media:string")
-    # Simple URN with just a type marker (no version, subtype, or profile)
-    assert urn.type_name() is None  # "string" is a marker tag, not type=
-    assert urn.subtype() is None
-    assert urn.version() is None
-    assert urn.profile() is None
-
-
-# TEST058: Test parsing media URN with subtype extracts subtype tag correctly
-def test_parsing_with_subtype():
-    urn = MediaUrn.from_string("media:application;subtype=json")
-    assert urn.get_tag("application") is not None  # application is a marker
-    assert urn.subtype() == "json"
-
-
-# TEST059: Test parsing media URN with profile extracts profile URL correctly
-def test_parsing_with_profile():
-    urn = MediaUrn.from_string('media:application;subtype=json;profile="https://example.com/schema"')
-    assert urn.subtype() == "json"
-    assert urn.profile() == "https://example.com/schema"
-
-
 # TEST060: Test wrong prefix fails with InvalidPrefix error showing expected and actual prefix
 def test_wrong_prefix_fails():
     with pytest.raises(MediaUrnError, match="Invalid prefix"):
@@ -151,28 +127,6 @@ def test_is_void():
     # String is not void
     string_urn = MediaUrn.from_string(MEDIA_STRING)
     assert not string_urn.is_void()
-
-
-# TEST069: Test simple constructor creates media URN with type and version tags
-def test_simple_constructor():
-    urn = MediaUrn.simple("document", 2)
-    assert urn.get_tag("document") is not None  # Type marker
-    assert urn.version() == 2
-
-
-# TEST070: Test with_subtype constructor creates media URN with type, subtype, and optional version
-def test_with_subtype_constructor():
-    # With version
-    urn1 = MediaUrn.with_subtype("application", "json", 1)
-    assert urn1.get_tag("application") is not None
-    assert urn1.subtype() == "json"
-    assert urn1.version() == 1
-
-    # Without version
-    urn2 = MediaUrn.with_subtype("application", "xml", None)
-    assert urn2.get_tag("application") is not None
-    assert urn2.subtype() == "xml"
-    assert urn2.version() is None
 
 
 # TEST071: Test to_string roundtrip ensures serialization and deserialization preserve URN structure

@@ -105,6 +105,27 @@ class CapUrn:
 
         return cls(in_urn, out_urn, tags)
 
+    def _build_tagged_urn(self) -> TaggedUrn:
+        """Build a TaggedUrn representation of this CapUrn
+
+        Internal helper for serialization and tag manipulation.
+        """
+        builder = TaggedUrnBuilder(self.PREFIX)
+        builder.tag("in", self.in_urn)
+        builder.tag("out", self.out_urn)
+
+        for k, v in self.tags.items():
+            builder.tag(k, v)
+
+        return builder.build_allow_empty()
+
+    def tags_to_string(self) -> str:
+        """Serialize just the tags portion (without "cap:" prefix)
+
+        Returns tags in canonical form with proper quoting and sorting.
+        """
+        return self._build_tagged_urn().tags_to_string()
+
     def to_string(self) -> str:
         """Get the canonical string representation of this cap URN
 
@@ -113,17 +134,7 @@ class CapUrn:
         No trailing semicolon in canonical form.
         Values are quoted only when necessary (smart quoting via TaggedUrn).
         """
-        # Build using TaggedUrnBuilder
-        # in_urn and out_urn are guaranteed non-empty by constructor
-        builder = TaggedUrnBuilder(self.PREFIX)
-        builder.tag("in", self.in_urn)
-        builder.tag("out", self.out_urn)
-
-        for k, v in self.tags.items():
-            builder.tag(k, v)
-
-        urn = builder.build_allow_empty()
-        return urn.to_string()
+        return self._build_tagged_urn().to_string()
 
     def get_tag(self, key: str) -> Optional[str]:
         """Get a specific tag value

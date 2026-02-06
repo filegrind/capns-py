@@ -213,53 +213,9 @@ class MediaUrn:
         urn = TaggedUrn.from_string(s)
         return cls(urn)
 
-    @classmethod
-    def simple(cls, type_name: str, version: int) -> "MediaUrn":
-        """Create a simple MediaUrn with just type and version"""
-        builder = TaggedUrnBuilder(cls.PREFIX)
-        builder.solo_tag(type_name)
-        builder.tag("v", str(version))
-        urn = builder.build()
-        return cls(urn)
-
-    @classmethod
-    def with_subtype(
-        cls, type_name: str, subtype: str, version: Optional[int] = None
-    ) -> "MediaUrn":
-        """Create a MediaUrn with type, subtype, and optional version"""
-        builder = TaggedUrnBuilder(cls.PREFIX)
-        builder.solo_tag(type_name)
-        builder.tag("subtype", subtype)
-        if version is not None:
-            builder.tag("v", str(version))
-        urn = builder.build()
-        return cls(urn)
-
     def inner(self) -> TaggedUrn:
         """Get the inner TaggedUrn"""
         return self._urn
-
-    def type_name(self) -> Optional[str]:
-        """Get the type tag value (e.g., "string", "object", "application")"""
-        return self._urn.get_tag("type")
-
-    def subtype(self) -> Optional[str]:
-        """Get the subtype tag value (e.g., "json", "pdf", "png")"""
-        return self._urn.get_tag("subtype")
-
-    def version(self) -> Optional[int]:
-        """Get the version tag value"""
-        v = self._urn.get_tag("v")
-        if v is not None:
-            try:
-                return int(v)
-            except ValueError:
-                return None
-        return None
-
-    def profile(self) -> Optional[str]:
-        """Get the profile tag value (URL)"""
-        return self._urn.get_tag("profile")
 
     def get_tag(self, key: str) -> Optional[str]:
         """Get any tag value by key"""
@@ -278,6 +234,13 @@ class MediaUrn:
         """Create a new MediaUrn without a specific tag"""
         new_urn = self._urn.without_tag(key)
         return MediaUrn(new_urn)
+
+    def tags_to_string(self) -> str:
+        """Serialize just the tags portion (without "media:" prefix)
+
+        Returns tags in canonical form with proper quoting and sorting.
+        """
+        return self._urn.tags_to_string()
 
     def to_string(self) -> str:
         """Get the canonical string representation"""

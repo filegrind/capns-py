@@ -302,9 +302,15 @@ class CapRegistry:
 
         normalized_urn = normalize_cap_urn(urn)
 
-        # URL-encode only the tags part (after "cap:") since the path prefix must be literal
-        tags_part = normalized_urn[4:] if normalized_urn.startswith("cap:") else normalized_urn
-        encoded_tags = url_encode(tags_part, safe='')
+        # Parse and validate the normalized URN
+        try:
+            cap_urn_obj = CapUrn.from_string(normalized_urn)
+        except Exception as e:
+            raise RegistryError(f"Invalid cap URN '{normalized_urn}': {e}")
+
+        # URL-encode the tags portion using CapUrn API
+        tags_str = cap_urn_obj.tags_to_string()
+        encoded_tags = url_encode(tags_str, safe='')
         url = f"{self.config.registry_base_url}/cap:{encoded_tags}"
 
         try:

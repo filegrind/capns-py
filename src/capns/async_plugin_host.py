@@ -39,6 +39,7 @@ from dataclasses import dataclass
 from capns.cbor_frame import Frame, FrameType, Limits, MessageId
 from capns.cbor_io import handshake_async, AsyncFrameReader, AsyncFrameWriter, CborError
 from capns.caller import CapArgumentValue
+from capns.cap_urn import CapUrn, CapUrnError
 
 
 class AsyncHostError(Exception):
@@ -558,15 +559,38 @@ class AsyncPluginHost:
 
             # Find matching handler
             handler = None
+
+            # Parse requested cap URN - fail hard if malformed
+            try:
+                cap_urn_obj = CapUrn.from_string(cap_urn)
+            except CapUrnError as e:
+                # Malformed cap URN in request - send error back to caller
+                err_frame = Frame.err(
+                    frame.id,
+                    "INVALID_CAP_URN",
+                    f"Malformed cap URN in request: {cap_urn}: {e}"
+                )
+                await writer_queue.put(WriteFrame(err_frame))
+                return
+
+            cap_op = cap_urn_obj.get_tag("op")
+
             for registered_urn, registered_handler in state.capabilities.items():
-                # Simple wildcard matching: cap:in=*;op=X;out=* matches any in/out
+                # Parse registered URN - fail hard if malformed (this is a plugin bug)
+                try:
+                    reg_urn_obj = CapUrn.from_string(registered_urn)
+                except CapUrnError as e:
+                    # Plugin registered a malformed URN - this is a fatal error
+                    import logging
+                    logging.error(f"Plugin registered malformed cap URN '{registered_urn}': {e}")
+                    raise RuntimeError(f"Plugin has malformed registered cap URN: {registered_urn}: {e}")
+
+                reg_op = reg_urn_obj.get_tag("op")
+
                 # Match on operation name
-                if "op=" in cap_urn and "op=" in registered_urn:
-                    cap_op = cap_urn.split("op=")[1].split(";")[0]
-                    reg_op = registered_urn.split("op=")[1].split(";")[0]
-                    if cap_op == reg_op:
-                        handler = registered_handler
-                        break
+                if cap_op and reg_op and cap_op == reg_op:
+                    handler = registered_handler
+                    break
 
             if handler is None:
                 # No handler found - send ERR frame

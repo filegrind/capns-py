@@ -506,9 +506,15 @@ class MediaUrnRegistry:
 
         normalized_urn = normalize_media_urn(urn)
 
-        # URL-encode only the tags part (after "media:")
-        tags_part = normalized_urn[6:] if normalized_urn.startswith("media:") else normalized_urn
-        encoded_tags = url_encode(tags_part, safe='')
+        # Parse and validate the normalized URN
+        try:
+            media_urn_obj = MediaUrn.from_string(normalized_urn)
+        except Exception as e:
+            raise MediaRegistryError(f"Invalid media URN '{normalized_urn}': {e}")
+
+        # URL-encode the tags portion using TaggedUrn API
+        tags_str = media_urn_obj.inner().tags_to_string()
+        encoded_tags = url_encode(tags_str, safe='')
         url = f"{self.config.registry_base_url}/media:{encoded_tags}"
 
         try:
