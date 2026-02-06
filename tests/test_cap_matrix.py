@@ -9,6 +9,8 @@ from capns.cap_matrix import (
     CapGraph,
     CapGraphEdge,
     CapMatrix,
+    CapCube,
+    BestCapSetMatch,
     CapMatrixError,
     NoSetsFoundError,
     InvalidUrnError,

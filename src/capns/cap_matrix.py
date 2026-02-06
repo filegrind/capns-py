@@ -567,3 +567,195 @@ class CapMatrix:
     def clear(self) -> None:
         """Clear all registered sets"""
         self.sets.clear()
+
+
+# ==============================================================================
+# CapCube - Composite registry manager
+# ==============================================================================
+
+
+@dataclass
+class BestCapSetMatch:
+    """Best match result from CapCube"""
+    cap: Cap
+    specificity: int
+    registry_name: str
+
+
+class CompositeCapSet(CapSet):
+    """Wrapper that implements CapSet for CapCube
+
+    This allows the composite to be used with CapCaller
+    """
+
+    def __init__(self, registries: List[Tuple[str, CapMatrix]]):
+        self.registries = registries
+
+    def execute_cap(self, cap_urn: str, arguments: List["CapArgumentValue"]) -> bytes:
+        """Execute capability on the appropriate registry"""
+        # Find the registry that has this cap
+        for registry_name, registry in self.registries:
+            try:
+                host, cap = registry.find_best_cap_set(cap_urn)
+                return host.execute_cap(cap_urn, arguments)
+            except NoSetsFoundError:
+                continue
+
+        raise NoSetsFoundError(cap_urn)
+
+    def graph(self) -> CapGraph:
+        """Build a directed graph from all capabilities in the registries
+
+        The graph represents all possible conversions where:
+        - Nodes are MediaSpec IDs (e.g., "media:string", "media:binary")
+        - Edges are capabilities that convert from one spec to another
+
+        This enables discovering conversion paths between different media formats.
+        """
+        graph = CapGraph()
+
+        for registry_name, registry in self.registries:
+            for host_name in registry.get_host_names():
+                caps = registry.get_capabilities_for_host(host_name)
+                if caps:
+                    for cap in caps:
+                        graph.add_cap(cap, registry_name)
+
+        return graph
+
+
+class CapCube:
+    """Composite registry that aggregates multiple CapMatrix instances
+
+    CapCube allows managing multiple registries (e.g., providers and plugins)
+    and selecting capabilities based on specificity across all registries.
+
+    On specificity ties, the first registered registry wins (priority order).
+    """
+
+    def __init__(self):
+        """Create a new composite registry"""
+        self.registries: List[Tuple[str, CapMatrix]] = []
+
+    def add_registry(self, name: str, registry: CapMatrix) -> None:
+        """Add a child registry with a name
+
+        Registries are checked in order of addition for tie-breaking.
+
+        Args:
+            name: Name of the registry
+            registry: CapMatrix instance
+        """
+        self.registries.append((name, registry))
+
+    def remove_registry(self, name: str) -> Optional[CapMatrix]:
+        """Remove a child registry by name
+
+        Args:
+            name: Name of the registry to remove
+
+        Returns:
+            The removed CapMatrix if found, None otherwise
+        """
+        for i, (reg_name, registry) in enumerate(self.registries):
+            if reg_name == name:
+                return self.registries.pop(i)[1]
+        return None
+
+    def get_registry(self, name: str) -> Optional[CapMatrix]:
+        """Get a child registry by name
+
+        Args:
+            name: Name of the registry
+
+        Returns:
+            The CapMatrix if found, None otherwise
+        """
+        for reg_name, registry in self.registries:
+            if reg_name == name:
+                return registry
+        return None
+
+    def find_best_cap_set(self, request_urn: str) -> BestCapSetMatch:
+        """Find the best capability host across ALL child registries
+
+        This method polls all registries and compares their best matches
+        by specificity. Returns the cap definition and specificity of the best match.
+        On specificity tie, returns the match from the first registry (priority order).
+
+        Args:
+            request_urn: The requested capability URN
+
+        Returns:
+            BestCapSetMatch with cap, specificity, and registry name
+
+        Raises:
+            InvalidUrnError: If URN is invalid
+            NoSetsFoundError: If no matching sets found
+        """
+        try:
+            request = CapUrn.from_string(request_urn)
+        except Exception as e:
+            raise InvalidUrnError(f"{request_urn}: {e}")
+
+        best_overall: Optional[BestCapSetMatch] = None
+
+        for registry_name, registry in self.registries:
+            # Find the best match within this registry
+            try:
+                host, cap = registry.find_best_cap_set(request_urn)
+                specificity = cap.urn.specificity()
+
+                candidate = BestCapSetMatch(
+                    cap=cap,
+                    specificity=specificity,
+                    registry_name=registry_name,
+                )
+
+                if best_overall is None:
+                    best_overall = candidate
+                elif specificity > best_overall.specificity:
+                    # Only replace if strictly more specific
+                    # On tie, keep the first one (priority order)
+                    best_overall = candidate
+
+            except (InvalidUrnError, NoSetsFoundError):
+                # This registry doesn't have a match, continue to next
+                continue
+
+        if best_overall is None:
+            raise NoSetsFoundError(request_urn)
+
+        return best_overall
+
+    def can_handle(self, request_urn: str) -> bool:
+        """Check if any registry can handle the specified capability
+
+        Args:
+            request_urn: The requested capability URN
+
+        Returns:
+            True if any registry can handle it, False otherwise
+        """
+        try:
+            self.find_best_cap_set(request_urn)
+            return True
+        except (InvalidUrnError, NoSetsFoundError):
+            return False
+
+    def get_registry_names(self) -> List[str]:
+        """Get names of all child registries
+
+        Returns:
+            List of registry names
+        """
+        return [name for name, _ in self.registries]
+
+    def graph(self) -> CapGraph:
+        """Build a directed graph from all capabilities in all registries
+
+        Returns:
+            CapGraph instance with all capabilities
+        """
+        composite = CompositeCapSet(self.registries)
+        return composite.graph()
