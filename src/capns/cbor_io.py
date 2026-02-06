@@ -1,7 +1,7 @@
 """CBOR I/O - Reading and Writing CBOR Frames
 
-This module provides streaming CBOR frame encoding/decoding over pipes.
-Frames are written as length-prefixed CBOR.
+This module provides streaming CBOR frame encoding/decoding over stdio pipes.
+Frames are written as length-prefixed CBOR (same framing as before, but CBOR payload).
 
 ## Wire Format
 
@@ -13,10 +13,10 @@ Frames are written as length-prefixed CBOR.
 └─────────────────────────────────────────────────────────┘
 ```
 
-The CBOR payload is a map with integer keys.
+The CBOR payload is a map with integer keys (see cbor_frame.py).
 """
 
-import struct
+import io
 from typing import BinaryIO, Optional
 from dataclasses import dataclass
 
@@ -34,6 +34,7 @@ from capns.cbor_frame import (
     Keys,
     DEFAULT_MAX_FRAME,
     DEFAULT_MAX_CHUNK,
+    PROTOCOL_VERSION,
 )
 
 
@@ -42,7 +43,7 @@ MAX_FRAME_HARD_LIMIT = 16 * 1024 * 1024
 
 
 class CborError(Exception):
-    """Base CBOR error"""
+    """Base CBOR I/O error"""
     pass
 
 
@@ -74,6 +75,11 @@ class UnexpectedEofError(CborError):
     pass
 
 
+class ProtocolError(CborError):
+    """Protocol error"""
+    pass
+
+
 class HandshakeError(CborError):
     """Handshake failed"""
     pass
@@ -102,9 +108,9 @@ def encode_frame(frame: Frame) -> bytes:
 
     # Message ID
     if frame.id.is_uuid():
-        frame_map[Keys.ID] = frame.id.as_bytes()
+        frame_map[Keys.ID] = frame.id.uuid_bytes  # CBOR bytes
     else:
-        frame_map[Keys.ID] = frame.id.uint_value
+        frame_map[Keys.ID] = frame.id.uint_value  # CBOR integer
 
     # Sequence number
     frame_map[Keys.SEQ] = frame.seq
@@ -134,7 +140,7 @@ def encode_frame(frame: Frame) -> bytes:
     try:
         return cbor2.dumps(frame_map)
     except Exception as e:
-        raise EncodeError(str(e))
+        raise EncodeError(f"CBOR encoding failed: {e}")
 
 
 def decode_frame(data: bytes) -> Frame:
@@ -156,57 +162,66 @@ def decode_frame(data: bytes) -> Frame:
     try:
         frame_map = cbor2.loads(data)
     except Exception as e:
-        raise DecodeError(str(e))
+        raise DecodeError(f"CBOR decoding failed: {e}")
 
     if not isinstance(frame_map, dict):
         raise InvalidFrameError("expected map")
 
-    # Extract required fields
-    if Keys.VERSION not in frame_map:
-        raise InvalidFrameError("missing version")
-    version = int(frame_map[Keys.VERSION])
+    # Convert keys to integers if they're not already
+    lookup = {}
+    for k, v in frame_map.items():
+        if isinstance(k, int):
+            lookup[k] = v
 
-    if Keys.FRAME_TYPE not in frame_map:
+    # Extract required fields
+    version = lookup.get(Keys.VERSION)
+    if version is None:
+        raise InvalidFrameError("missing version")
+
+    frame_type_u8 = lookup.get(Keys.FRAME_TYPE)
+    if frame_type_u8 is None:
         raise InvalidFrameError("missing frame_type")
-    frame_type_u8 = int(frame_map[Keys.FRAME_TYPE])
+
     frame_type = FrameType.from_u8(frame_type_u8)
     if frame_type is None:
         raise InvalidFrameError(f"invalid frame_type: {frame_type_u8}")
 
-    if Keys.ID not in frame_map:
-        raise InvalidFrameError("missing id")
-    id_value = frame_map[Keys.ID]
-    if isinstance(id_value, bytes):
+    # Extract ID
+    id_value = lookup.get(Keys.ID)
+    if id_value is None:
+        id_obj = MessageId.default()
+    elif isinstance(id_value, bytes):
         if len(id_value) == 16:
-            id = MessageId(id_value)
+            id_obj = MessageId(id_value)
         else:
-            # Invalid UUID length, treat as uint 0
-            id = MessageId(0)
+            # Treat as uint fallback
+            id_obj = MessageId(0)
     elif isinstance(id_value, int):
-        id = MessageId(id_value)
+        id_obj = MessageId(id_value)
     else:
-        id = MessageId(0)
+        id_obj = MessageId(0)
 
-    seq = int(frame_map.get(Keys.SEQ, 0))
+    # Extract seq
+    seq = lookup.get(Keys.SEQ, 0)
 
     # Optional fields
-    content_type = frame_map.get(Keys.CONTENT_TYPE)
-    meta = frame_map.get(Keys.META)
-    payload = frame_map.get(Keys.PAYLOAD)
-    len_value = frame_map.get(Keys.LEN)
-    offset = frame_map.get(Keys.OFFSET)
-    eof = frame_map.get(Keys.EOF)
-    cap = frame_map.get(Keys.CAP)
+    content_type = lookup.get(Keys.CONTENT_TYPE)
+    meta = lookup.get(Keys.META)
+    payload = lookup.get(Keys.PAYLOAD)
+    len_field = lookup.get(Keys.LEN)
+    offset = lookup.get(Keys.OFFSET)
+    eof = lookup.get(Keys.EOF)
+    cap = lookup.get(Keys.CAP)
 
     return Frame(
-        version=version,
         frame_type=frame_type,
-        id=id,
+        id=id_obj,
+        version=version,
         seq=seq,
         content_type=content_type,
         meta=meta,
         payload=payload,
-        len=len_value,
+        len=len_field,
         offset=offset,
         eof=eof,
         cap=cap,
@@ -223,6 +238,7 @@ def write_frame(writer: BinaryIO, frame: Frame, limits: Limits) -> None:
 
     Raises:
         FrameTooLargeError: If frame exceeds limits
+        CborError: If write fails
     """
     frame_bytes = encode_frame(frame)
 
@@ -232,48 +248,64 @@ def write_frame(writer: BinaryIO, frame: Frame, limits: Limits) -> None:
     if len(frame_bytes) > MAX_FRAME_HARD_LIMIT:
         raise FrameTooLargeError(len(frame_bytes), MAX_FRAME_HARD_LIMIT)
 
-    # Write 4-byte length prefix (big-endian)
-    length = struct.pack(">I", len(frame_bytes))
-    writer.write(length)
-    writer.write(frame_bytes)
-    writer.flush()
+    length = len(frame_bytes)
+    length_bytes = length.to_bytes(4, byteorder='big')
+
+    try:
+        writer.write(length_bytes)
+        writer.write(frame_bytes)
+        writer.flush()
+    except Exception as e:
+        raise CborError(f"Write failed: {e}")
 
 
 def read_frame(reader: BinaryIO, limits: Limits) -> Optional[Frame]:
-    """Read a length-prefixed CBOR frame
+    """Read a length-prefixed CBOR frame from a reader
+
+    Returns Ok(None) on clean EOF, Err(UnexpectedEof) on partial read.
 
     Args:
         reader: Binary input stream
         limits: Protocol limits
 
     Returns:
-        Frame if available, None on clean EOF
+        Frame or None on EOF
 
     Raises:
         UnexpectedEofError: On partial read
         FrameTooLargeError: If frame exceeds limits
+        CborError: If read fails
     """
     # Read 4-byte length prefix
-    length_bytes = reader.read(4)
-    if len(length_bytes) == 0:
+    try:
+        len_buf = reader.read(4)
+    except Exception as e:
+        raise CborError(f"Read failed: {e}")
+
+    if len(len_buf) == 0:
         # Clean EOF
         return None
-    if len(length_bytes) < 4:
+
+    if len(len_buf) < 4:
         raise UnexpectedEofError()
 
-    length = struct.unpack(">I", length_bytes)[0]
+    length = int.from_bytes(len_buf, byteorder='big')
 
     # Validate length
-    max_allowed = min(limits.max_frame, MAX_FRAME_HARD_LIMIT)
-    if length > max_allowed:
-        raise FrameTooLargeError(length, max_allowed)
+    if length > limits.max_frame or length > MAX_FRAME_HARD_LIMIT:
+        raise FrameTooLargeError(length, min(limits.max_frame, MAX_FRAME_HARD_LIMIT))
 
     # Read payload
-    payload = reader.read(length)
+    try:
+        payload = reader.read(length)
+    except Exception as e:
+        raise CborError(f"Read failed: {e}")
+
     if len(payload) < length:
         raise UnexpectedEofError()
 
-    return decode_frame(payload)
+    frame = decode_frame(payload)
+    return frame
 
 
 class FrameReader:
@@ -284,18 +316,43 @@ class FrameReader:
 
         Args:
             reader: Binary input stream
-            limits: Optional protocol limits (defaults to standard limits)
+            limits: Optional limits (defaults to Limits.default())
         """
         self.reader = reader
-        self.limits = limits or Limits.default()
+        self.limits = limits if limits is not None else Limits.default()
+
+    @classmethod
+    def new(cls, reader: BinaryIO) -> "FrameReader":
+        """Create a new frame reader with default limits"""
+        return cls(reader)
+
+    @classmethod
+    def with_limits(cls, reader: BinaryIO, limits: Limits) -> "FrameReader":
+        """Create a new frame reader with specified limits"""
+        return cls(reader, limits)
 
     def set_limits(self, limits: Limits) -> None:
         """Update limits (after handshake)"""
         self.limits = limits
 
     def read(self) -> Optional[Frame]:
-        """Read the next frame"""
+        """Read the next frame
+
+        Returns:
+            Frame or None on EOF
+
+        Raises:
+            CborError: If read fails
+        """
         return read_frame(self.reader, self.limits)
+
+    def get_limits(self) -> Limits:
+        """Get the current limits"""
+        return self.limits
+
+    def inner_mut(self) -> BinaryIO:
+        """Get mutable access to the underlying reader"""
+        return self.reader
 
 
 class FrameWriter:
@@ -306,80 +363,56 @@ class FrameWriter:
 
         Args:
             writer: Binary output stream
-            limits: Optional protocol limits (defaults to standard limits)
+            limits: Optional limits (defaults to Limits.default())
         """
         self.writer = writer
-        self.limits = limits or Limits.default()
+        self.limits = limits if limits is not None else Limits.default()
+
+    @classmethod
+    def new(cls, writer: BinaryIO) -> "FrameWriter":
+        """Create a new frame writer with default limits"""
+        return cls(writer)
+
+    @classmethod
+    def with_limits(cls, writer: BinaryIO, limits: Limits) -> "FrameWriter":
+        """Create a new frame writer with specified limits"""
+        return cls(writer, limits)
 
     def set_limits(self, limits: Limits) -> None:
         """Update limits (after handshake)"""
         self.limits = limits
 
     def write(self, frame: Frame) -> None:
-        """Write a frame"""
-        write_frame(self.writer, frame, self.limits)
-
-    def write_chunked(self, id: MessageId, content_type: str, data: bytes) -> None:
-        """Write a large payload as multiple chunks
-
-        This splits the payload into chunks respecting max_chunk and writes
-        them as CHUNK frames with proper offset/len/eof markers.
+        """Write a frame
 
         Args:
-            id: Message ID for all chunks
-            content_type: Content type
-            data: Payload data to chunk
+            frame: Frame to write
+
+        Raises:
+            CborError: If write fails
         """
-        total_len = len(data)
-        max_chunk = self.limits.max_chunk
+        write_frame(self.writer, frame, self.limits)
 
-        if total_len == 0:
-            # Empty payload - send single chunk with eof
-            frame = Frame.chunk(id, 0, b"")
-            frame.content_type = content_type
-            frame.len = 0
-            frame.offset = 0
-            frame.eof = True
-            self.write(frame)
-            return
+    def get_limits(self) -> Limits:
+        """Get the current limits"""
+        return self.limits
 
-        seq = 0
-        offset = 0
-
-        while offset < total_len:
-            chunk_size = min(max_chunk, total_len - offset)
-            is_last = (offset + chunk_size >= total_len)
-
-            chunk_data = data[offset:offset + chunk_size]
-
-            frame = Frame.chunk(id, seq, chunk_data)
-            frame.offset = offset
-
-            # Set content_type and total len on first chunk
-            if seq == 0:
-                frame.content_type = content_type
-                frame.len = total_len
-
-            if is_last:
-                frame.eof = True
-
-            self.write(frame)
-
-            seq += 1
-            offset += chunk_size
+    def inner_mut(self) -> BinaryIO:
+        """Get mutable access to the underlying writer"""
+        return self.writer
 
 
 @dataclass
 class HandshakeResult:
-    """Handshake result including manifest
-
-    Returned by host side after receiving plugin's HELLO with manifest.
-    """
+    """Result of handshake negotiation"""
     limits: Limits
-    manifest: bytes  # Plugin manifest JSON data (REQUIRED from plugin)
+    manifest: bytes
 
 
-def handshake(reader: FrameReader, writer: FrameWriter) -> HandshakeResult:
+def handshake(
+    reader: FrameReader,
+    writer: FrameWriter,
+) -> HandshakeResult:
     """Perform HELLO handshake and extract plugin manifest (host side - sends first)
 
     Args:
@@ -387,10 +420,10 @@ def handshake(reader: FrameReader, writer: FrameWriter) -> HandshakeResult:
         writer: Frame writer
 
     Returns:
-        HandshakeResult with negotiated limits and plugin manifest
+        HandshakeResult with negotiated limits and manifest
 
     Raises:
-        HandshakeError: If handshake fails or manifest is missing
+        HandshakeError: If handshake fails
     """
     # Send our HELLO
     our_hello = Frame.hello(DEFAULT_MAX_FRAME, DEFAULT_MAX_CHUNK)
@@ -422,7 +455,7 @@ def handshake(reader: FrameReader, writer: FrameWriter) -> HandshakeResult:
     reader.set_limits(limits)
     writer.set_limits(limits)
 
-    return HandshakeResult(limits=limits, manifest=manifest)
+    return HandshakeResult(limits=limits, manifest=bytes(manifest))
 
 
 def handshake_accept(
@@ -438,7 +471,7 @@ def handshake_accept(
     Args:
         reader: Frame reader
         writer: Frame writer
-        manifest: Plugin manifest JSON bytes (REQUIRED)
+        manifest: Plugin manifest bytes (REQUIRED)
 
     Returns:
         Negotiated limits
