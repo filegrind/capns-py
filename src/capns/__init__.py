@@ -119,6 +119,15 @@ from capns.registry import (
     normalize_cap_urn,
 )
 
+from capns.cap_matrix import (
+    CapGraph,
+    CapGraphEdge,
+    CapMatrix,
+    CapMatrixError,
+    NoSetsFoundError,
+    InvalidUrnError,
+)
+
 from capns.standard.caps import (
     model_availability_urn,
     model_path_urn,
@@ -235,6 +244,13 @@ __all__ = [
     "ParseError",
     "CacheError",
     "normalize_cap_urn",
+    # CapMatrix
+    "CapGraph",
+    "CapGraphEdge",
+    "CapMatrix",
+    "CapMatrixError",
+    "NoSetsFoundError",
+    "InvalidUrnError",
     # Standard caps
     "model_availability_urn",
     "model_path_urn",
