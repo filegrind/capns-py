@@ -1,0 +1,28 @@
+[build-system]
+requires = ["setuptools>=61.0"]
+build-backend = "setuptools.build_backend"
+
+[project]
+name = "capns"
+version = "0.1.0"
+description = "Core cap URN and definition system for FGND plugins"
+authors = [{name = "https://github.com/jowharshamshiri"}]
+license = {text = "MIT"}
+requires-python = ">=3.10"
+dependencies = [
+    "tagged-urn>=0.1.0",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=7.0",
+    "pytest-cov>=4.0",
+]
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+python_files = ["test_*.py"]
+python_functions = ["test_*"]
