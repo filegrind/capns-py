@@ -45,6 +45,7 @@ import os
 import json
 import io
 import threading
+import queue
 from typing import Callable, Protocol, Optional, Dict, List, Any
 from abc import ABC, abstractmethod
 import cbor2
@@ -191,11 +192,116 @@ class PeerInvoker(Protocol):
 
 class NoPeerInvoker:
     """A no-op PeerInvoker that always returns an error.
-    Used when peer invocation is not supported.
+    Used when peer invocation is not supported (CLI mode only).
     """
 
     def invoke(self, cap_urn: str, arguments: List[CapArgumentValue]) -> Any:
         raise PeerRequestError("Peer invocation not supported in this context")
+
+
+class PendingPeerRequest:
+    """Internal struct to track pending peer requests (plugin invoking host caps)."""
+    def __init__(self):
+        # Bounded queue for responses (buffer up to 64 chunks)
+        self.queue: queue.Queue = queue.Queue(maxsize=64)
+
+
+class PeerInvokerImpl:
+    """Implementation of PeerInvoker that sends REQ frames to the host.
+
+    Enables bidirectional communication where a plugin handler can invoke caps
+    on the host while processing a request.
+    """
+
+    def __init__(self, writer: FrameWriter, writer_lock: threading.Lock, pending_requests: Dict[str, PendingPeerRequest]):
+        self.writer = writer
+        self.writer_lock = writer_lock
+        self.pending_requests = pending_requests
+        self.pending_lock = threading.Lock()
+
+    def invoke(self, cap_urn: str, arguments: List[CapArgumentValue]) -> Any:
+        """Invoke a cap on the host with unified arguments.
+
+        Sends a REQ frame to the host with the specified cap URN and arguments.
+        Arguments are serialized as CBOR with native binary values.
+        Returns an iterator that yields response chunks (bytes) or raises errors.
+
+        The iterator will block waiting for responses until the host sends END or ERR.
+        """
+        # Generate a new message ID for this request
+        request_id = MessageId.new_uuid()
+        request_id_str = request_id.to_string()
+
+        # Create a pending request tracker
+        pending_req = PendingPeerRequest()
+
+        # Register the pending request before sending
+        with self.pending_lock:
+            self.pending_requests[request_id_str] = pending_req
+
+        # Serialize arguments as CBOR - binary values stay binary (no base64 needed)
+        try:
+            cbor_args = [
+                {
+                    "media_urn": arg.media_urn,
+                    "value": arg.value
+                }
+                for arg in arguments
+            ]
+            payload_bytes = cbor2.dumps(cbor_args)
+        except Exception as e:
+            # Remove the pending request on serialization failure
+            with self.pending_lock:
+                del self.pending_requests[request_id_str]
+            raise SerializeError(f"Failed to serialize arguments: {e}")
+
+        # Create and send the REQ frame with CBOR payload
+        frame = Frame.req(
+            request_id,
+            cap_urn,
+            payload_bytes,
+            "application/cbor"
+        )
+
+        try:
+            with self.writer_lock:
+                self.writer.write(frame)
+        except Exception as e:
+            # Remove the pending request on send failure
+            with self.pending_lock:
+                del self.pending_requests[request_id_str]
+            raise PeerRequestError(f"Failed to send REQ frame: {e}")
+
+        # Return an iterator that yields response chunks
+        return self._response_iterator(request_id_str, pending_req)
+
+    def _response_iterator(self, request_id_str: str, pending_req: PendingPeerRequest):
+        """Generator that yields response chunks from the queue."""
+        while True:
+            try:
+                # Block waiting for response chunk
+                item = pending_req.queue.get(timeout=30.0)  # 30 second timeout
+
+                if item[0] == "ok":
+                    # Got a chunk of data
+                    yield item[1]
+                elif item[0] == "end":
+                    # Got final END frame
+                    if item[1]:  # If there's final payload
+                        yield item[1]
+                    break
+                elif item[0] == "error":
+                    # Got error from host
+                    raise PeerResponseError(item[1])
+                else:
+                    raise PeerResponseError(f"Unknown response type: {item[0]}")
+
+            except queue.Empty:
+                # Timeout waiting for response
+                with self.pending_lock:
+                    if request_id_str in self.pending_requests:
+                        del self.pending_requests[request_id_str]
+                raise PeerResponseError("Timeout waiting for host response")
 
 
 class CliStreamEmitter:
@@ -587,9 +693,6 @@ class PluginRuntime:
 
     def run_cbor_mode(self) -> None:
         """Run in Plugin CBOR mode - binary frame protocol via stdin/stdout."""
-        import queue
-        from collections import defaultdict
-
         # Lock stdin for reading (single reader)
         reader = FrameReader(sys.stdin.buffer)
         # Use stdout directly, protected by lock for thread safety
@@ -608,7 +711,7 @@ class PluginRuntime:
                 raise
 
         # Track pending peer requests (plugin invoking host caps)
-        pending_peer_requests: Dict[str, queue.Queue] = {}
+        pending_peer_requests: Dict[str, PendingPeerRequest] = {}
         pending_lock = threading.Lock()
 
         # Track active handler threads for cleanup
@@ -669,8 +772,8 @@ class PluginRuntime:
                     emitter = ThreadSafeEmitter(writer, request_id, writer_lock)
                     # Note: writer is shared via emitter, emitter handles locking via writer_lock
 
-                    # Create no-op peer invoker (bidirectional not implemented yet)
-                    peer_invoker = NoPeerInvoker()
+                    # Create peer invoker for bidirectional communication
+                    peer_invoker = PeerInvokerImpl(writer, writer_lock, pending_peer_requests)
 
                     # Extract effective payload from unified arguments if content_type is CBOR
                     try:
@@ -731,12 +834,19 @@ class PluginRuntime:
                 frame_id_str = frame.id.to_string() if hasattr(frame.id, 'to_string') else str(frame.id)
                 with pending_lock:
                     if frame_id_str in pending_peer_requests:
-                        q = pending_peer_requests[frame_id_str]
+                        pending_req = pending_peer_requests[frame_id_str]
                         payload = frame.payload if frame.payload is not None else b""
-                        q.put(("ok", payload))
 
-                        # Remove completed requests (RES or END frame marks completion)
-                        if frame.frame_type in (FrameType.RES, FrameType.END):
+                        # CHUNK frames: add to queue, keep request pending
+                        if frame.frame_type == FrameType.CHUNK:
+                            pending_req.queue.put(("ok", payload))
+                        # RES or END frames: final response, mark as complete
+                        elif frame.frame_type == FrameType.RES:
+                            pending_req.queue.put(("ok", payload))
+                            pending_req.queue.put(("end", b""))
+                            del pending_peer_requests[frame_id_str]
+                        elif frame.frame_type == FrameType.END:
+                            pending_req.queue.put(("end", payload))
                             del pending_peer_requests[frame_id_str]
 
             elif frame.frame_type == FrameType.ERR:
@@ -744,10 +854,10 @@ class PluginRuntime:
                 frame_id_str = frame.id.to_string() if hasattr(frame.id, 'to_string') else str(frame.id)
                 with pending_lock:
                     if frame_id_str in pending_peer_requests:
-                        q = pending_peer_requests[frame_id_str]
+                        pending_req = pending_peer_requests[frame_id_str]
                         code = frame.error_code() or "UNKNOWN"
                         message = frame.error_message() or "Unknown error"
-                        q.put(("error", f"[{code}] {message}"))
+                        pending_req.queue.put(("error", f"[{code}] {message}"))
                         del pending_peer_requests[frame_id_str]
 
             elif frame.frame_type == FrameType.LOG:
