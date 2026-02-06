@@ -16,6 +16,7 @@ Frames are written as length-prefixed CBOR (same framing as before, but CBOR pay
 The CBOR payload is a map with integer keys (see cbor_frame.py).
 """
 
+import asyncio
 import io
 from typing import BinaryIO, Optional
 from dataclasses import dataclass
