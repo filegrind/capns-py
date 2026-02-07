@@ -9,7 +9,7 @@ from capns.cap_matrix import (
     CapGraph,
     CapGraphEdge,
     CapMatrix,
-    CapCube,
+    CapBlock,
     BestCapSetMatch,
     CapMatrixError,
     NoSetsFoundError,
@@ -367,12 +367,12 @@ def test_cap_matrix_clear():
 
 
 # =============================================================================
-# CapCube Tests (Multi-Registry Composite)
+# CapBlock Tests (Multi-Registry Composite)
 # =============================================================================
 
 
-# TEST121: Test CapCube selects more specific cap over less specific regardless of registry order
-def test_cap_cube_more_specific_wins():
+# TEST121: Test CapBlock selects more specific cap over less specific regardless of registry order
+def test_cap_block_more_specific_wins():
     # This is the key test: provider has less specific cap, plugin has more specific
     # The more specific one should win regardless of registry order
 
@@ -396,7 +396,7 @@ def test_cap_cube_more_specific_wins():
     plugin_registry.register_cap_set("plugin", plugin_host, [plugin_cap])
 
     # Create composite with provider first (normally would have priority on ties)
-    composite = CapCube()
+    composite = CapBlock()
     composite.add_registry("providers", provider_registry)
     composite.add_registry("plugins", plugin_registry)
 
@@ -412,8 +412,8 @@ def test_cap_cube_more_specific_wins():
     assert best.cap.title == "Plugin PDF Thumbnail Generator (specific)"
 
 
-# TEST122: Test CapCube breaks specificity ties by first registered registry
-def test_cap_cube_tie_goes_to_first():
+# TEST122: Test CapBlock breaks specificity ties by first registered registry
+def test_cap_block_tie_goes_to_first():
     # When specificity is equal, first registry wins
 
     registry1 = CapMatrix()
@@ -428,7 +428,7 @@ def test_cap_cube_tie_goes_to_first():
     cap2 = make_cap(make_test_urn("ext=pdf;op=generate"), "Registry 2 Cap")
     registry2.register_cap_set("host2", host2, [cap2])
 
-    composite = CapCube()
+    composite = CapBlock()
     composite.add_registry("first", registry1)
     composite.add_registry("second", registry2)
 
@@ -439,8 +439,8 @@ def test_cap_cube_tie_goes_to_first():
     assert best.cap.title == "Registry 1 Cap"
 
 
-# TEST123: Test CapCube polls all registries to find most specific match
-def test_cap_cube_polls_all():
+# TEST123: Test CapBlock polls all registries to find most specific match
+def test_cap_block_polls_all():
     # Test that all registries are polled
 
     registry1 = CapMatrix()
@@ -462,7 +462,7 @@ def test_cap_cube_polls_all():
     cap3 = make_cap(make_test_urn("ext=pdf;format=thumbnail;op=generate"), "Registry 3")
     registry3.register_cap_set("host3", host3, [cap3])
 
-    composite = CapCube()
+    composite = CapBlock()
     composite.add_registry("r1", registry1)
     composite.add_registry("r2", registry2)
     composite.add_registry("r3", registry3)
@@ -473,11 +473,11 @@ def test_cap_cube_polls_all():
     assert best.registry_name == "r3", "Most specific registry should win"
 
 
-# TEST124: Test CapCube returns error when no registries match the request
-def test_cap_cube_no_match():
+# TEST124: Test CapBlock returns error when no registries match the request
+def test_cap_block_no_match():
     registry = CapMatrix()
 
-    composite = CapCube()
+    composite = CapBlock()
     composite.add_registry("empty", registry)
 
     try:
@@ -487,8 +487,8 @@ def test_cap_cube_no_match():
         pass  # Expected
 
 
-# TEST125: Test CapCube prefers specific plugin over generic provider fallback
-def test_cap_cube_fallback_scenario():
+# TEST125: Test CapBlock prefers specific plugin over generic provider fallback
+def test_cap_block_fallback_scenario():
     # Test the exact scenario from the user's issue:
     # Provider: generic fallback (can handle any file type)
     # Plugin:   PDF-specific handler
@@ -515,7 +515,7 @@ def test_cap_cube_fallback_scenario():
     plugin_registry.register_cap_set("pdf_plugin", plugin_host, [plugin_cap])
 
     # Providers first (would win on tie)
-    composite = CapCube()
+    composite = CapBlock()
     composite.add_registry("providers", provider_registry)
     composite.add_registry("plugins", plugin_registry)
 
@@ -527,8 +527,8 @@ def test_cap_cube_fallback_scenario():
     assert best.registry_name == "plugins"
 
 
-# TEST126: Test CapCube accepts_request method checks if any registry can accept the capability
-def test_cap_cube_accepts_request():
+# TEST126: Test CapBlock accepts_request method checks if any registry can accept the capability
+def test_cap_block_accepts_request():
     # Test the accepts_request() method
 
     provider_registry = CapMatrix()
@@ -540,7 +540,7 @@ def test_cap_cube_accepts_request():
     )
     provider_registry.register_cap_set("test_provider", provider_host, [provider_cap])
 
-    composite = CapCube()
+    composite = CapBlock()
     composite.add_registry("providers", provider_registry)
 
     # Test accepts_request
@@ -548,9 +548,9 @@ def test_cap_cube_accepts_request():
     assert not composite.accepts_request(make_test_urn("op=nonexistent"))
 
 
-# TEST133: Test CapCube graph integration with multiple registries and conversion paths
-def test_cap_cube_graph_integration():
-    # Test that CapCube.graph() works correctly
+# TEST133: Test CapBlock graph integration with multiple registries and conversion paths
+def test_cap_block_graph_integration():
+    # Test that CapBlock.graph() works correctly
 
     provider_registry = CapMatrix()
     plugin_registry = CapMatrix()
@@ -575,7 +575,7 @@ def test_cap_cube_graph_integration():
     plugin_cap.output = CapOutput("media:form=map;textable", "output")
     plugin_registry.register_cap_set("plugin", plugin_host, [plugin_cap])
 
-    cube = CapCube()
+    cube = CapBlock()
     cube.add_registry("providers", provider_registry)
     cube.add_registry("plugins", plugin_registry)
 

@@ -570,20 +570,20 @@ class CapMatrix:
 
 
 # ==============================================================================
-# CapCube - Composite registry manager
+# CapBlock - Composite registry manager
 # ==============================================================================
 
 
 @dataclass
 class BestCapSetMatch:
-    """Best match result from CapCube"""
+    """Best match result from CapBlock"""
     cap: Cap
     specificity: int
     registry_name: str
 
 
 class CompositeCapSet(CapSet):
-    """Wrapper that implements CapSet for CapCube
+    """Wrapper that implements CapSet for CapBlock
 
     This allows the composite to be used with CapCaller
     """
@@ -624,10 +624,10 @@ class CompositeCapSet(CapSet):
         return graph
 
 
-class CapCube:
+class CapBlock:
     """Composite registry that aggregates multiple CapMatrix instances
 
-    CapCube allows managing multiple registries (e.g., providers and plugins)
+    CapBlock allows managing multiple registries (e.g., providers and plugins)
     and selecting capabilities based on specificity across all registries.
 
     On specificity ties, the first registered registry wins (priority order).
