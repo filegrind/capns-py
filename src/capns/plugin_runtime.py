@@ -174,7 +174,7 @@ class PeerInvoker(Protocol):
     """
 
     def invoke(self, cap_urn: str, arguments: List[CapArgumentValue]) -> Any:
-        """Invoke a cap on the host with unified arguments.
+        """Invoke a cap on the host with arguments.
 
         Sends a REQ frame to the host with the specified cap URN and arguments.
         Arguments are serialized as CBOR with native binary values.
@@ -220,7 +220,7 @@ class PeerInvokerImpl:
         self.pending_lock = threading.Lock()
 
     def invoke(self, cap_urn: str, arguments: List[CapArgumentValue]) -> Any:
-        """Invoke a cap on the host with unified arguments.
+        """Invoke a cap on the host with arguments.
 
         Sends a REQ frame to the host with the specified cap URN and arguments.
         Arguments are serialized as CBOR with native binary values.
@@ -408,14 +408,14 @@ def extract_effective_payload(
     """Extract the effective payload from a REQ frame.
 
     If the content_type is "application/cbor", the payload is expected to be
-    CBOR unified arguments: `[{media_urn: string, value: bytes}, ...]`
+    CBOR arguments: `[{media_urn: string, value: bytes}, ...]`
     The function extracts the value whose media_urn matches the cap's input type.
 
     For other content types (or if content_type is None), returns the raw payload.
     """
-    # Check if this is CBOR unified arguments
+    # Check if this is CBOR arguments
     if content_type != "application/cbor":
-        # Not CBOR unified arguments - return raw payload
+        # Not CBOR arguments - return raw payload
         return payload
 
     # Parse the cap URN to get the expected input media URN
@@ -434,10 +434,10 @@ def extract_effective_payload(
     try:
         cbor_value = cbor2.loads(payload)
     except Exception as e:
-        raise DeserializeError(f"Failed to parse CBOR unified arguments: {e}")
+        raise DeserializeError(f"Failed to parse CBOR arguments: {e}")
 
     if not isinstance(cbor_value, list):
-        raise DeserializeError("CBOR unified arguments must be an array")
+        raise DeserializeError("CBOR arguments must be an array")
 
     # Find the argument with matching media_urn
     for arg in cbor_value:
@@ -464,7 +464,7 @@ def extract_effective_payload(
 
     # No matching argument found - this is an error, no fallbacks
     raise DeserializeError(
-        f"No argument found matching expected input media type '{expected_input}' in CBOR unified arguments"
+        f"No argument found matching expected input media type '{expected_input}' in CBOR arguments"
     )
 
 
@@ -776,7 +776,7 @@ class PluginRuntime:
                     # Create peer invoker for bidirectional communication
                     peer_invoker = PeerInvokerImpl(writer, writer_lock, pending_peer_requests)
 
-                    # Extract effective payload from unified arguments if content_type is CBOR
+                    # Extract effective payload from arguments if content_type is CBOR
                     try:
                         payload = extract_effective_payload(
                             raw_payload,

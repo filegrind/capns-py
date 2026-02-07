@@ -101,7 +101,7 @@ class CapSet:
         cap_urn: str,
         arguments: List[CapArgumentValue],
     ) -> Tuple[Optional[bytes], Optional[str]]:
-        """Execute a cap with unified arguments identified by media_urn
+        """Execute a cap with arguments identified by media_urn
 
         The cap definition's sources specify how to extract values (stdin, position, cli_flag).
 
@@ -158,7 +158,7 @@ class CapCaller:
         return positions
 
     def validate_arguments(self, arguments: List[CapArgumentValue]) -> None:
-        """Validate unified arguments against cap definition
+        """Validate arguments against cap definition
 
         Checks that all required arguments are provided (by media_urn).
 
@@ -186,7 +186,7 @@ class CapCaller:
                 )
 
     async def call(self, arguments: List[CapArgumentValue]):
-        """Call the cap with unified arguments identified by media_urn
+        """Call the cap with arguments identified by media_urn
 
         Validates arguments against cap definition before execution.
 

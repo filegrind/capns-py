@@ -204,7 +204,7 @@ def test_extract_effective_payload_no_content_type():
 
 # TEST261: Test extract_effective_payload with CBOR content extracts matching argument value
 def test_extract_effective_payload_cbor_match():
-    # Build CBOR unified arguments: [{media_urn: "media:string;textable;form=scalar", value: bytes("hello")}]
+    # Build CBOR arguments: [{media_urn: "media:string;textable;form=scalar", value: bytes("hello")}]
     args = [
         {
             "media_urn": "media:string;textable;form=scalar",
