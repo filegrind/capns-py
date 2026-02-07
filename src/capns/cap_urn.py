@@ -223,12 +223,12 @@ class CapUrn:
         new_tags.pop(key_lower, None)
         return CapUrn(self.in_urn, self.out_urn, new_tags)
 
-    def matches(self, request: "CapUrn") -> bool:
-        """Check if this cap matches another based on tag compatibility
+    def accepts(self, request: "CapUrn") -> bool:
+        """Check if this cap (handler) accepts the given request.
 
-        Direction (in/out) uses `MediaUrn.matches()` (which delegates to `TaggedUrn.matches()`):
-        - Input: `request_input.matches(cap_input)` — does request's data satisfy cap's requirement?
-        - Output: `cap_output.matches(request_output)` — does cap's output satisfy what request expects?
+        Direction (in/out) uses MediaUrn semantic matching:
+        - Input: cap_in.accepts(request_in) -- cap's input pattern accepts request's data
+        - Output: cap_out.conforms_to(request_out) -- cap's output conforms to what request expects
 
         For other tags:
         - For each tag in the request: cap has same value, wildcard (*), or missing tag
@@ -236,19 +236,19 @@ class CapUrn:
 
         Missing tags (except in/out) are treated as wildcards (less specific, can handle any value).
         """
-        # Direction specs: TaggedUrn semantic matching via MediaUrn.matches()
-        # Check in_urn: request's input must satisfy cap's input requirement
+        # Direction specs: TaggedUrn semantic matching via MediaUrn
+        # Check in_urn: cap's input pattern must accept request's input data
         if self.in_urn != "*" and request.in_urn != "*":
             cap_in = MediaUrn.from_string(self.in_urn)
             request_in = MediaUrn.from_string(request.in_urn)
-            if not request_in.matches(cap_in):
+            if not cap_in.accepts(request_in):
                 return False
 
-        # Check out_urn: cap's output must satisfy what the request expects
+        # Check out_urn: cap's output must conform to what the request expects
         if self.out_urn != "*" and request.out_urn != "*":
             cap_out = MediaUrn.from_string(self.out_urn)
             request_out = MediaUrn.from_string(request.out_urn)
-            if not cap_out.matches(request_out):
+            if not cap_out.conforms_to(request_out):
                 return False
 
         # Check all other tags that the request specifies
@@ -271,18 +271,17 @@ class CapUrn:
         # The cap is just more specific than needed
         return True
 
-    def matches_str(self, request_str: str) -> bool:
-        """Check if this cap matches a string-specified request"""
-        request = CapUrn.from_string(request_str)
-        return self.matches(request)
+    def conforms_to(self, cap: "CapUrn") -> bool:
+        """Check if this cap URN (as a request) conforms to another cap (handler).
 
-    def can_handle(self, request: "CapUrn") -> bool:
-        """Check if this cap can handle a request
-
-        This is used when a request comes in with a cap URN
-        and we need to see if this cap can fulfill it.
+        Delegates to cap.accepts(self).
         """
-        return self.matches(request)
+        return cap.accepts(self)
+
+    def accepts_str(self, request_str: str) -> bool:
+        """Check if this cap accepts a string-specified request"""
+        request = CapUrn.from_string(request_str)
+        return self.accepts(request)
 
     def specificity(self) -> int:
         """Calculate specificity score for cap matching
@@ -319,14 +318,14 @@ class CapUrn:
 
         Two caps are compatible if they can potentially match
         the same types of requests (considering wildcards and missing tags as wildcards).
-        Direction specs are compatible if either is a subtype of the other via TaggedUrn matching.
+        Direction specs are compatible if either conforms to the other via TaggedUrn matching.
         """
-        # Check in_urn compatibility: either direction of MediaUrn.matches succeeds
+        # Check in_urn compatibility: either direction of conforms_to succeeds
         if self.in_urn != "*" and other.in_urn != "*":
             self_in = MediaUrn.from_string(self.in_urn)
             other_in = MediaUrn.from_string(other.in_urn)
-            fwd = self_in.matches(other_in)
-            rev = other_in.matches(self_in)
+            fwd = self_in.conforms_to(other_in)
+            rev = other_in.conforms_to(self_in)
             if not fwd and not rev:
                 return False
 
@@ -334,8 +333,8 @@ class CapUrn:
         if self.out_urn != "*" and other.out_urn != "*":
             self_out = MediaUrn.from_string(self.out_urn)
             other_out = MediaUrn.from_string(other.out_urn)
-            fwd = self_out.matches(other_out)
-            rev = other_out.matches(self_out)
+            fwd = self_out.conforms_to(other_out)
+            rev = other_out.conforms_to(self_out)
             if not fwd and not rev:
                 return False
 

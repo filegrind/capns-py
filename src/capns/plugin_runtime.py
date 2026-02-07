@@ -455,8 +455,8 @@ def extract_effective_payload(
             try:
                 arg_urn = MediaUrn.from_string(media_urn_str)
                 # Use semantic matching in both directions
-                fwd = arg_urn.matches(expected_media_urn)
-                rev = expected_media_urn.matches(arg_urn)
+                fwd = arg_urn.conforms_to(expected_media_urn)
+                rev = expected_media_urn.conforms_to(arg_urn)
                 if fwd or rev:
                     return value
             except Exception:
@@ -583,7 +583,7 @@ class PluginRuntime:
         for pattern, handler in self.handlers.items():
             try:
                 pattern_urn = CapUrn.from_string(pattern)
-                if pattern_urn.matches(request_urn):
+                if pattern_urn.accepts(request_urn):
                     return handler
             except Exception:
                 continue

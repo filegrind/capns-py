@@ -55,7 +55,7 @@ print(cap.to_string())  # cap:ext=pdf;in="media:textable;form=scalar";op=generat
 
 # Matching semantics
 request = CapUrn.from_string('cap:in="media:textable;form=scalar";out="media:form=map;textable";op=generate')
-print(cap.matches(request))  # True
+print(cap.accepts(request))  # True
 
 # Specificity
 print(cap.specificity())  # Higher score = more specific
@@ -148,8 +148,8 @@ Examples:
 
 Matching follows tagged URN semantics with direction-aware rules:
 
-- **Input matching**: `request_input.matches(cap_input)` - Does request's data satisfy cap's requirement?
-- **Output matching**: `cap_output.matches(request_output)` - Does cap's output satisfy request's expectation?
+- **Input matching**: `cap_input.accepts(request_input)` - Does the cap's input requirement accept the request's data?
+- **Output matching**: `cap_output.conforms_to(request_output)` - Does the cap's output conform to the request's expectation?
 - **Missing tags** are treated as wildcards (less specific, can handle any value)
 - **Specificity**: Direction specs contribute their MediaUrn tag count; more tags = more specific
 

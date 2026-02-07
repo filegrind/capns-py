@@ -246,15 +246,23 @@ class MediaUrn:
         """Get the canonical string representation"""
         return self._urn.to_string()
 
-    def matches(self, request: "MediaUrn") -> bool:
-        """Check if this media URN matches a request using tagged URN semantics
+    def conforms_to(self, pattern: "MediaUrn") -> bool:
+        """Check if this media URN (instance) satisfies the pattern's constraints.
 
-        Matching follows standard tagged URN rules:
-        - Missing tags are treated as implicit wildcards
-        - Explicit "*" values are wildcards
-        - All present tags must match
+        An instance conforms to a pattern when the instance has all tags
+        required by the pattern. Missing tags in the pattern are wildcards.
+        Equivalent to pattern.accepts(self).
         """
-        return self._urn.matches(request._urn)
+        return self._urn.conforms_to(pattern._urn)
+
+    def accepts(self, instance: "MediaUrn") -> bool:
+        """Check if this media URN (pattern) accepts the given instance.
+
+        A pattern accepts an instance when the instance has all tags
+        required by the pattern. Missing tags in the pattern are wildcards.
+        Equivalent to instance.conforms_to(self).
+        """
+        return self._urn.accepts(instance._urn)
 
     def specificity(self) -> int:
         """Get the specificity of this media URN

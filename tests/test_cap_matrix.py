@@ -97,8 +97,8 @@ def test_invalid_urn_handling():
         registry.find_cap_sets("invalid-urn")
 
 
-# TEST120: Test can_handle checks if registry can handle a capability request
-def test_can_handle():
+# TEST120: Test accepts_request checks if registry can accept a capability request
+def test_accepts_request():
     registry = CapMatrix()
 
     host = MockCapSet("test-host")
@@ -106,15 +106,15 @@ def test_can_handle():
 
     registry.register_cap_set("test-host", host, [cap])
 
-    # Should handle matching capability
-    assert registry.can_handle(make_test_urn("op=process"))
-    assert registry.can_handle(make_test_urn("op=process;advanced"))
+    # Should accept matching capability
+    assert registry.accepts_request(make_test_urn("op=process"))
+    assert registry.accepts_request(make_test_urn("op=process;advanced"))
 
-    # Should not handle non-matching capability
-    assert not registry.can_handle(make_test_urn("op=different"))
+    # Should not accept non-matching capability
+    assert not registry.accepts_request(make_test_urn("op=different"))
 
     # Should not crash on invalid URN
-    assert not registry.can_handle("invalid-urn")
+    assert not registry.accepts_request("invalid-urn")
 
 
 # TEST127: Test CapGraph adds nodes and edges from capability definitions
@@ -527,9 +527,9 @@ def test_cap_cube_fallback_scenario():
     assert best.registry_name == "plugins"
 
 
-# TEST126: Test CapCube can_handle method checks if any registry can handle the capability
-def test_cap_cube_can_handle():
-    # Test the can_handle() method
+# TEST126: Test CapCube accepts_request method checks if any registry can accept the capability
+def test_cap_cube_accepts_request():
+    # Test the accepts_request() method
 
     provider_registry = CapMatrix()
 
@@ -543,9 +543,9 @@ def test_cap_cube_can_handle():
     composite = CapCube()
     composite.add_registry("providers", provider_registry)
 
-    # Test can_handle
-    assert composite.can_handle(make_test_urn("ext=pdf;op=generate"))
-    assert not composite.can_handle(make_test_urn("op=nonexistent"))
+    # Test accepts_request
+    assert composite.accepts_request(make_test_urn("ext=pdf;op=generate"))
+    assert not composite.accepts_request(make_test_urn("op=nonexistent"))
 
 
 # TEST133: Test CapCube graph integration with multiple registries and conversion paths

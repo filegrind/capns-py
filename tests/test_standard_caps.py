@@ -57,11 +57,11 @@ def test_llm_conversation_urn_specs():
     # Compare semantically via MediaUrn matching (tag order may differ)
     in_spec = MediaUrn.from_string(urn.in_spec())
     expected_in = MediaUrn.from_string(MEDIA_STRING)
-    assert in_spec.matches(expected_in), f"in_spec '{urn.in_spec()}' must match MEDIA_STRING '{MEDIA_STRING}'"
+    assert in_spec.conforms_to(expected_in), f"in_spec '{urn.in_spec()}' must conform to MEDIA_STRING '{MEDIA_STRING}'"
 
     out_spec = MediaUrn.from_string(urn.out_spec())
     expected_out = MediaUrn.from_string(MEDIA_LLM_INFERENCE_OUTPUT)
-    assert out_spec.matches(expected_out), f"out_spec '{urn.out_spec()}' must match '{MEDIA_LLM_INFERENCE_OUTPUT}'"
+    assert out_spec.conforms_to(expected_out), f"out_spec '{urn.out_spec()}' must conform to '{MEDIA_LLM_INFERENCE_OUTPUT}'"
 
 
 # TEST312: Test all URN builders produce parseable cap URNs

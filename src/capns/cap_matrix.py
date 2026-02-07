@@ -119,8 +119,8 @@ class CapGraph:
     def get_outgoing(self, spec: str) -> List[CapGraphEdge]:
         """Get all edges originating from a spec (all caps that take this spec as input).
 
-        Uses MediaUrn::matches() matching: returns edges where the provided spec
-        satisfies the edge's from_spec requirement. This allows a specific media URN
+        Uses MediaUrn.conforms_to() matching: returns edges where the provided spec
+        conforms to the edge's from_spec requirement. This allows a specific media URN
         like "media:pdf;bytes" to match caps that accept "media:pdf".
         """
         try:
@@ -132,7 +132,7 @@ class CapGraph:
         for edge in self.edges:
             try:
                 requirement_urn = MediaUrn.from_string(edge.from_spec)
-                if provided_urn.matches(requirement_urn):
+                if provided_urn.conforms_to(requirement_urn):
                     result.append(edge)
             except Exception:
                 continue
@@ -142,8 +142,8 @@ class CapGraph:
     def get_incoming(self, spec: str) -> List[CapGraphEdge]:
         """Get all edges targeting a spec (all caps that produce this spec as output).
 
-        Uses MediaUrn::matches() matching: returns edges where the edge's to_spec
-        satisfies the requested spec requirement.
+        Uses MediaUrn.conforms_to() matching: returns edges where the edge's to_spec
+        (produced output) conforms to the requested spec requirement.
         """
         try:
             requirement_urn = MediaUrn.from_string(spec)
@@ -154,7 +154,7 @@ class CapGraph:
         for edge in self.edges:
             try:
                 produced_urn = MediaUrn.from_string(edge.to_spec)
-                if produced_urn.matches(requirement_urn):
+                if produced_urn.conforms_to(requirement_urn):
                     result.append(edge)
             except Exception:
                 continue
@@ -164,7 +164,7 @@ class CapGraph:
     def has_direct_edge(self, from_spec: str, to_spec: str) -> bool:
         """Check if there's any direct edge from one spec to another.
 
-        Uses matches() matching: from_spec must satisfy edge input, edge output must satisfy to_spec.
+        Uses conforms_to() matching: from_spec must satisfy edge input, edge output must conform to to_spec.
         """
         try:
             to_requirement = MediaUrn.from_string(to_spec)
@@ -174,7 +174,7 @@ class CapGraph:
         for edge in self.get_outgoing(from_spec):
             try:
                 produced_urn = MediaUrn.from_string(edge.to_spec)
-                if produced_urn.matches(to_requirement):
+                if produced_urn.conforms_to(to_requirement):
                     return True
             except Exception:
                 continue
@@ -185,7 +185,7 @@ class CapGraph:
         """Get all direct edges from one spec to another.
 
         Returns all capabilities that can directly convert from `from_spec` to `to_spec`.
-        Uses matches() matching for both input and output specs.
+        Uses conforms_to() matching for both input and output specs.
         Sorted by specificity (highest first).
         """
         try:
@@ -197,7 +197,7 @@ class CapGraph:
         for edge in self.get_outgoing(from_spec):
             try:
                 produced_urn = MediaUrn.from_string(edge.to_spec)
-                if produced_urn.matches(to_requirement):
+                if produced_urn.conforms_to(to_requirement):
                     edges.append(edge)
             except Exception:
                 continue
@@ -210,7 +210,7 @@ class CapGraph:
         """Check if a conversion path exists from one spec to another.
 
         Uses BFS to find if there's any path (direct or through intermediates).
-        Uses matches() matching for both input and output specs.
+        Uses conforms_to() matching for both input and output specs.
         """
         if from_spec == to_spec:
             return True
@@ -232,7 +232,7 @@ class CapGraph:
         for edge in initial_edges:
             try:
                 produced_urn = MediaUrn.from_string(edge.to_spec)
-                if produced_urn.matches(to_requirement):
+                if produced_urn.conforms_to(to_requirement):
                     return True
             except Exception:
                 pass
@@ -247,7 +247,7 @@ class CapGraph:
             for edge in self.get_outgoing(current):
                 try:
                     produced_urn = MediaUrn.from_string(edge.to_spec)
-                    if produced_urn.matches(to_requirement):
+                    if produced_urn.conforms_to(to_requirement):
                         return True
                 except Exception:
                     pass
@@ -262,7 +262,7 @@ class CapGraph:
         """Find the shortest conversion path from one spec to another.
 
         Returns a sequence of edges representing the conversion chain.
-        Uses matches() matching for both input and output specs.
+        Uses conforms_to() matching for both input and output specs.
         Returns None if no path exists.
         """
         if from_spec == to_spec:
@@ -289,7 +289,7 @@ class CapGraph:
 
             try:
                 produced_urn = MediaUrn.from_string(edge.to_spec)
-                if produced_urn.matches(to_requirement):
+                if produced_urn.conforms_to(to_requirement):
                     # Direct path found
                     return [self.edges[edge_idx]]
             except Exception:
@@ -307,7 +307,7 @@ class CapGraph:
 
                 try:
                     produced_urn = MediaUrn.from_string(edge.to_spec)
-                    if produced_urn.matches(to_requirement):
+                    if produced_urn.conforms_to(to_requirement):
                         # Found target - reconstruct path
                         path_indices = [edge_idx]
                         backtrack = current
@@ -337,7 +337,7 @@ class CapGraph:
         """Find all conversion paths from one spec to another (up to a maximum depth).
 
         Returns all possible paths, sorted by total path length (shortest first).
-        Uses matches() matching for both input and output specs.
+        Uses conforms_to() matching for both input and output specs.
         Limits search to `max_depth` edges to prevent infinite loops in cyclic graphs.
         """
         try:
@@ -380,7 +380,7 @@ class CapGraph:
     ) -> None:
         """DFS helper for finding all paths.
 
-        Uses matches() matching for output spec comparison.
+        Uses conforms_to() matching for output spec comparison.
         """
         if remaining_depth == 0:
             return
@@ -392,10 +392,10 @@ class CapGraph:
             except ValueError:
                 continue
 
-            # Check if edge output satisfies target
+            # Check if edge output conforms to target
             try:
                 produced = MediaUrn.from_string(edge.to_spec)
-                output_satisfies = produced.matches(target)
+                output_satisfies = produced.conforms_to(target)
             except Exception:
                 output_satisfies = False
 
@@ -485,7 +485,7 @@ class CapMatrix:
 
         for entry in self.sets.values():
             for cap in entry.capabilities:
-                if cap.urn.matches(request):
+                if cap.urn.accepts(request):
                     matching_sets.append(entry.host)
                     break  # Found a matching capability for this host
 
@@ -518,7 +518,7 @@ class CapMatrix:
 
         for entry in self.sets.values():
             for cap in entry.capabilities:
-                if cap.urn.matches(request):
+                if cap.urn.accepts(request):
                     specificity = cap.urn.specificity()
                     if best_match is None or specificity > best_match[2]:
                         best_match = (entry.host, cap, specificity)
@@ -545,8 +545,8 @@ class CapMatrix:
         entry = self.sets.get(host_name)
         return entry.capabilities.copy() if entry else None
 
-    def can_handle(self, request_urn: str) -> bool:
-        """Check if any host can handle the specified capability"""
+    def accepts_request(self, request_urn: str) -> bool:
+        """Check if any host can accept the specified capability request"""
         try:
             self.find_cap_sets(request_urn)
             return True
@@ -728,14 +728,14 @@ class CapCube:
 
         return best_overall
 
-    def can_handle(self, request_urn: str) -> bool:
-        """Check if any registry can handle the specified capability
+    def accepts_request(self, request_urn: str) -> bool:
+        """Check if any registry can accept the specified capability request
 
         Args:
             request_urn: The requested capability URN
 
         Returns:
-            True if any registry can handle it, False otherwise
+            True if any registry can accept it, False otherwise
         """
         try:
             self.find_best_cap_set(request_urn)
