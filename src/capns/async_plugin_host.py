@@ -147,11 +147,10 @@ class PluginResponse:
         return not self.is_single()
 
     def final_payload(self) -> Optional[bytes]:
-        """Get the complete payload by concatenating all chunks"""
+        """Get the final chunk's payload (last chunk of streaming, or single payload)"""
         if not self.chunks:
             return None
-        # Concatenate all chunks to get the full payload
-        return b''.join(chunk.payload for chunk in self.chunks)
+        return self.chunks[-1].payload
 
     def concatenated(self) -> bytes:
         """Concatenate all payloads into a single buffer"""
