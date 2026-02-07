@@ -259,3 +259,24 @@ def test_response_chunk_copy():
 
     # Verify it's an independent copy (not the same object)
     assert cloned is not chunk
+
+
+# TEST316: Test that concatenated() returns full payload while final_payload() returns only last chunk
+def test_concatenated_vs_final_payload_divergence():
+    chunks = [
+        ResponseChunk(payload=b"AAAA", seq=0, offset=None, len=None, is_eof=False),
+        ResponseChunk(payload=b"BBBB", seq=1, offset=None, len=None, is_eof=False),
+        ResponseChunk(payload=b"CCCC", seq=2, offset=None, len=None, is_eof=True),
+    ]
+
+    response = PluginResponse(chunks)
+
+    # concatenated() returns ALL chunk data joined
+    assert response.concatenated() == b"AAAABBBBCCCC"
+
+    # final_payload() returns ONLY the last chunk's data
+    assert response.final_payload() == b"CCCC"
+
+    # They must NOT be equal (this is the divergence the large_payload bug exposed)
+    assert response.concatenated() != response.final_payload(), \
+        "concatenated and final_payload must diverge for multi-chunk responses"

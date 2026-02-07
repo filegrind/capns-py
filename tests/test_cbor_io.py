@@ -539,3 +539,117 @@ def test_handshake_with_very_small_limits():
 
     assert received is not None
     assert received.hello_max_frame() == 256
+
+
+# TEST313: Test write_response_with_chunking splits payload larger than max_chunk into
+# CHUNK frames + END frame, and reading them back reassembles the full original data
+def test_write_response_with_chunking_reassembly():
+    buf = io.BytesIO()
+    writer = FrameWriter(buf, Limits(DEFAULT_MAX_FRAME, 100))
+
+    request_id = MessageId.new_uuid()
+    data = bytes(i % 256 for i in range(250))
+
+    writer.write_response_with_chunking(request_id, data)
+
+    buf.seek(0)
+    reader = FrameReader(buf)
+
+    frames = []
+    while True:
+        frame = reader.read()
+        if frame is None:
+            break
+        frames.append(frame)
+        if frame.frame_type == FrameType.END:
+            break
+
+    # 250 bytes / 100 max_chunk = 2 CHUNK + 1 END
+    assert len(frames) == 3, f"Expected 3 frames, got {len(frames)}"
+    assert frames[0].frame_type == FrameType.CHUNK
+    assert frames[1].frame_type == FrameType.CHUNK
+    assert frames[2].frame_type == FrameType.END
+
+    reassembled = b""
+    for f in frames:
+        reassembled += f.payload or b""
+    assert reassembled == data, "concatenated chunks must match original data"
+
+
+# TEST314: Test payload exactly equal to max_chunk produces single END frame (no CHUNK frames)
+def test_exact_max_chunk_single_end():
+    buf = io.BytesIO()
+    writer = FrameWriter(buf, Limits(DEFAULT_MAX_FRAME, 100))
+
+    request_id = MessageId.new_uuid()
+    data = bytes([0xAB] * 100)
+
+    writer.write_response_with_chunking(request_id, data)
+
+    buf.seek(0)
+    reader = FrameReader(buf)
+    frame = reader.read()
+
+    assert frame is not None
+    assert frame.frame_type == FrameType.END, "exact max_chunk must produce single END"
+    assert frame.payload == data
+    assert len(frame.payload) == 100
+
+
+# TEST315: Test payload of max_chunk + 1 produces exactly one CHUNK frame + one END frame
+def test_max_chunk_plus_one_splits_into_two():
+    buf = io.BytesIO()
+    writer = FrameWriter(buf, Limits(DEFAULT_MAX_FRAME, 100))
+
+    request_id = MessageId.new_uuid()
+    data = bytes(range(101))
+
+    writer.write_response_with_chunking(request_id, data)
+
+    buf.seek(0)
+    reader = FrameReader(buf)
+
+    chunk = reader.read()
+    assert chunk is not None
+    assert chunk.frame_type == FrameType.CHUNK
+    assert len(chunk.payload) == 100
+
+    end = reader.read()
+    assert end is not None
+    assert end.frame_type == FrameType.END
+    assert len(end.payload) == 1
+
+    reassembled = chunk.payload + end.payload
+    assert reassembled == data
+
+
+# TEST317: Test auto-chunking preserves data integrity across chunk boundaries for 3x max_chunk payload
+def test_chunking_data_integrity_3x():
+    buf = io.BytesIO()
+    writer = FrameWriter(buf, Limits(DEFAULT_MAX_FRAME, 100))
+
+    request_id = MessageId.new_uuid()
+    pattern = b"ABCDEFGHIJ"
+    data = (pattern * 30)  # 300 bytes
+
+    writer.write_response_with_chunking(request_id, data)
+
+    buf.seek(0)
+    reader = FrameReader(buf)
+
+    frames = []
+    while True:
+        frame = reader.read()
+        if frame is None:
+            break
+        frames.append(frame)
+        if frame.frame_type == FrameType.END:
+            break
+
+    assert len(frames) == 3, "300/100 = 2 CHUNK + 1 END"
+
+    reassembled = b""
+    for f in frames:
+        reassembled += f.payload or b""
+    assert len(reassembled) == 300
+    assert reassembled == data, "pattern must be preserved across chunk boundaries"

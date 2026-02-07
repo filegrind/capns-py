@@ -394,6 +394,41 @@ class FrameWriter:
         """
         write_frame(self.writer, frame, self.limits)
 
+    def write_response_with_chunking(self, request_id: MessageId, payload: bytes) -> None:
+        """Write a response with automatic chunking for large payloads.
+
+        Payloads <= max_chunk produce a single END frame.
+        Payloads > max_chunk produce CHUNK frames + final END frame.
+
+        Args:
+            request_id: The request message ID
+            payload: The full response payload
+
+        Raises:
+            CborError: If write fails
+        """
+        max_chunk = self.limits.max_chunk
+
+        if len(payload) <= max_chunk:
+            frame = Frame.end(request_id, payload)
+            self.write(frame)
+            return
+
+        offset = 0
+        seq = 0
+        while offset < len(payload):
+            chunk_size = min(len(payload) - offset, max_chunk)
+            chunk_data = payload[offset:offset + chunk_size]
+            offset += chunk_size
+
+            if offset < len(payload):
+                frame = Frame.chunk(request_id, seq, chunk_data)
+                self.write(frame)
+                seq += 1
+            else:
+                frame = Frame.end(request_id, chunk_data)
+                self.write(frame)
+
     def get_limits(self) -> Limits:
         """Get the current limits"""
         return self.limits
