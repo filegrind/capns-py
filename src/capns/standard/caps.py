@@ -1,7 +1,7 @@
 """Standard capability URN builders
 
 This module provides standard capability URN builders used across
-all FGND providers. These are the single source of truth for URN construction.
+all MACINA providers. These are the single source of truth for URN construction.
 """
 
 from typing import Optional

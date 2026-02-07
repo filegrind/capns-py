@@ -5,7 +5,7 @@ build-backend = "setuptools.build_meta"
 [project]
 name = "capns"
 version = "0.1.0"
-description = "Core cap URN and definition system for FGND plugins"
+description = "Core cap URN and definition system for MACINA plugins"
 authors = [{name = "https://github.com/jowharshamshiri"}]
 license = {text = "MIT"}
 requires-python = ">=3.10"
