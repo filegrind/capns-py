@@ -3,6 +3,7 @@
 import pytest
 import json
 import cbor2
+import sys
 from capns.plugin_runtime import (
     PluginRuntime,
     NoPeerInvoker,
@@ -400,3 +401,993 @@ def test_extract_effective_payload_binary_value():
         "cap:in=media:pdf;bytes;op=process;out=*"
     )
     assert result == binary_data, "binary values must roundtrip through CBOR extraction"
+
+
+# =============================================================================
+# File-path to bytes conversion tests (TEST336-TEST360)
+# =============================================================================
+
+def create_test_cap(urn_str: str, title: str, command: str, args: list) -> 'Cap':
+    """Helper function to create a Cap for tests"""
+    from capns.cap_urn import CapUrn
+    from capns.cap import Cap
+    urn = CapUrn.from_string(urn_str)
+    cap = Cap(urn, title, command)
+    cap.args = args
+    return cap
+
+
+def create_test_manifest(name: str, version: str, description: str, caps: list) -> CapManifest:
+    """Helper function to create a CapManifest for tests"""
+    return CapManifest(
+        name=name,
+        version=version,
+        description=description,
+        caps=caps
+    )
+
+
+# TEST336: Single file-path arg with stdin source reads file and passes bytes to handler
+def test_336_file_path_reads_file_passes_bytes(tmp_path):
+    from capns.cap import CapArg, StdinSource, PositionSource
+    import threading
+
+    test_file = tmp_path / "test336_input.pdf"
+    test_file.write_bytes(b"PDF binary content 336")
+
+    cap = create_test_cap(
+        'cap:in="media:pdf;bytes";op=process;out="media:void"',
+        "Process PDF",
+        "process",
+        [CapArg(
+            media_urn="media:file-path;textable;form=scalar",
+            required=True,
+            sources=[
+                StdinSource("media:pdf;bytes"),
+                PositionSource(0),
+            ]
+        )]
+    )
+
+    manifest = create_test_manifest("TestPlugin", "1.0.0", "Test", [cap])
+    runtime = PluginRuntime.with_manifest(manifest)
+
+    # Track what handler receives
+    received_payload = []
+
+    def handler(payload, emitter, peer):
+        received_payload.append(payload)
+        return b"processed"
+
+    runtime.register_raw(
+        'cap:in="media:pdf;bytes";op=process;out="media:void"',
+        handler
+    )
+
+    # Simulate CLI invocation: plugin process /path/to/file.pdf
+    cli_args = [str(test_file)]
+    cap = runtime.manifest.caps[0]
+    raw_payload = runtime.build_payload_from_cli(cap, cli_args)
+
+    # Extract effective payload (simulates what run_cli_mode does)
+    payload = extract_effective_payload(
+        raw_payload,
+        "application/cbor",
+        cap.urn_string()
+    )
+
+    handler_fn = runtime.find_handler(cap.urn_string())
+    emitter = CliStreamEmitter()
+    peer = NoPeerInvoker()
+    result = handler_fn(payload, emitter, peer)
+
+    # Verify handler received file bytes, not file path
+    assert received_payload[0] == b"PDF binary content 336", "Handler should receive file bytes"
+    assert result == b"processed"
+
+
+# TEST337: file-path arg without stdin source passes path as string (no conversion)
+def test_337_file_path_without_stdin_passes_string(tmp_path):
+    from capns.cap import CapArg, PositionSource
+
+    test_file = tmp_path / "test337_input.txt"
+    test_file.write_bytes(b"content")
+
+    cap = create_test_cap(
+        'cap:in="media:void";op=test;out="media:void"',
+        "Test",
+        "test",
+        [CapArg(
+            media_urn="media:file-path;textable;form=scalar",
+            required=True,
+            sources=[PositionSource(0)]  # NO stdin source!
+        )]
+    )
+
+    manifest = create_test_manifest("TestPlugin", "1.0.0", "Test", [cap])
+    runtime = PluginRuntime.with_manifest(manifest)
+
+    cli_args = [str(test_file)]
+    cap = runtime.manifest.caps[0]
+    result = runtime._extract_arg_value(cap.args[0], cli_args, None)
+
+    # Should get file PATH as string, not file CONTENTS
+    value_str = result.decode('utf-8')
+    assert "test337_input.txt" in value_str, "Should receive file path string when no stdin source"
+
+
+# TEST338: file-path arg reads file via --file CLI flag
+def test_338_file_path_via_cli_flag(tmp_path):
+    from capns.cap import CapArg, StdinSource, CliFlagSource
+
+    test_file = tmp_path / "test338.pdf"
+    test_file.write_bytes(b"PDF via flag 338")
+
+    cap = create_test_cap(
+        'cap:in="media:pdf;bytes";op=process;out="media:void"',
+        "Process",
+        "process",
+        [CapArg(
+            media_urn="media:file-path;textable;form=scalar",
+            required=True,
+            sources=[
+                StdinSource("media:pdf;bytes"),
+                CliFlagSource("--file"),
+            ]
+        )]
+    )
+
+    manifest = create_test_manifest("TestPlugin", "1.0.0", "Test", [cap])
+    runtime = PluginRuntime.with_manifest(manifest)
+
+    cli_args = ["--file", str(test_file)]
+    cap = runtime.manifest.caps[0]
+    result = runtime._extract_arg_value(cap.args[0], cli_args, None)
+
+    assert result == b"PDF via flag 338", "Should read file from --file flag"
+
+
+# TEST339: file-path-array reads multiple files with glob pattern
+def test_339_file_path_array_glob_expansion(tmp_path):
+    from capns.cap import CapArg, StdinSource, PositionSource
+
+    test_dir = tmp_path / "test339"
+    test_dir.mkdir()
+
+    file1 = test_dir / "doc1.txt"
+    file2 = test_dir / "doc2.txt"
+    file1.write_bytes(b"content1")
+    file2.write_bytes(b"content2")
+
+    cap = create_test_cap(
+        'cap:in="media:bytes";op=batch;out="media:void"',
+        "Batch",
+        "batch",
+        [CapArg(
+            media_urn="media:file-path;textable;form=list",
+            required=True,
+            sources=[
+                StdinSource("media:bytes"),
+                PositionSource(0),
+            ]
+        )]
+    )
+
+    manifest = create_test_manifest("TestPlugin", "1.0.0", "Test", [cap])
+    runtime = PluginRuntime.with_manifest(manifest)
+
+    # Pass glob pattern as JSON array
+    pattern = f"{test_dir}/*.txt"
+    paths_json = json.dumps([pattern])
+
+    cli_args = [paths_json]
+    cap = runtime.manifest.caps[0]
+    result = runtime._extract_arg_value(cap.args[0], cli_args, None)
+
+    # Decode CBOR array
+    files_array = cbor2.loads(result)
+
+    assert len(files_array) == 2, "Should find 2 files"
+
+    # Verify contents (order may vary, so sort)
+    bytes_vec = sorted(files_array)
+    assert bytes_vec == [b"content1", b"content2"]
+
+
+# TEST340: File not found error provides clear message
+def test_340_file_not_found_clear_error():
+    from capns.cap import CapArg, StdinSource, PositionSource
+    from capns.plugin_runtime import IoRuntimeError
+
+    cap = create_test_cap(
+        'cap:in="media:pdf;bytes";op=test;out="media:void"',
+        "Test",
+        "test",
+        [CapArg(
+            media_urn="media:file-path;textable;form=scalar",
+            required=True,
+            sources=[
+                StdinSource("media:pdf;bytes"),
+                PositionSource(0),
+            ]
+        )]
+    )
+
+    manifest = create_test_manifest("TestPlugin", "1.0.0", "Test", [cap])
+    runtime = PluginRuntime.with_manifest(manifest)
+
+    cli_args = ["/nonexistent/file.pdf"]
+    cap = runtime.manifest.caps[0]
+
+    with pytest.raises(IoRuntimeError) as exc_info:
+        runtime._extract_arg_value(cap.args[0], cli_args, None)
+
+    err_msg = str(exc_info.value)
+    assert "/nonexistent/file.pdf" in err_msg, "Error should mention file path"
+    assert "Failed to read file" in err_msg, "Error should be clear"
+
+
+# TEST341: stdin takes precedence over file-path in source order
+def test_341_stdin_precedence_over_file_path(tmp_path):
+    from capns.cap import CapArg, StdinSource, PositionSource
+
+    test_file = tmp_path / "test341_input.txt"
+    test_file.write_bytes(b"file content")
+
+    # Stdin source comes BEFORE position source
+    cap = create_test_cap(
+        'cap:in="media:bytes";op=test;out="media:void"',
+        "Test",
+        "test",
+        [CapArg(
+            media_urn="media:file-path;textable;form=scalar",
+            required=True,
+            sources=[
+                StdinSource("media:bytes"),  # First
+                PositionSource(0),            # Second
+            ]
+        )]
+    )
+
+    manifest = create_test_manifest("TestPlugin", "1.0.0", "Test", [cap])
+    runtime = PluginRuntime.with_manifest(manifest)
+
+    cli_args = [str(test_file)]
+    stdin_data = b"stdin content 341"
+    cap = runtime.manifest.caps[0]
+
+    result = runtime._extract_arg_value(cap.args[0], cli_args, stdin_data)
+
+    # Should get stdin data, not file content (stdin source tried first)
+    assert result == b"stdin content 341", "stdin source should take precedence"
+
+
+# TEST342: file-path with position 0 reads first positional arg as file
+def test_342_file_path_position_zero_reads_first_arg(tmp_path):
+    from capns.cap import CapArg, StdinSource, PositionSource
+
+    test_file = tmp_path / "test342.dat"
+    test_file.write_bytes(b"binary data 342")
+
+    cap = create_test_cap(
+        'cap:in="media:bytes";op=test;out="media:void"',
+        "Test",
+        "test",
+        [CapArg(
+            media_urn="media:file-path;textable;form=scalar",
+            required=True,
+            sources=[
+                StdinSource("media:bytes"),
+                PositionSource(0),
+            ]
+        )]
+    )
+
+    manifest = create_test_manifest("TestPlugin", "1.0.0", "Test", [cap])
+    runtime = PluginRuntime.with_manifest(manifest)
+
+    # CLI: plugin test /path/to/file (position 0 after subcommand)
+    cli_args = [str(test_file)]
+    cap = runtime.manifest.caps[0]
+    result = runtime._extract_arg_value(cap.args[0], cli_args, None)
+
+    assert result == b"binary data 342", "Should read file at position 0"
+
+
+# TEST343: Non-file-path args are not affected by file reading
+def test_343_non_file_path_args_unaffected():
+    from capns.cap import CapArg, StdinSource, PositionSource
+
+    # Arg with different media type should NOT trigger file reading
+    cap = create_test_cap(
+        'cap:in="media:void";op=test;out="media:void"',
+        "Test",
+        "test",
+        [CapArg(
+            media_urn="media:model-spec;textable;form=scalar",  # NOT file-path
+            required=True,
+            sources=[
+                StdinSource("media:model-spec;textable;form=scalar"),
+                PositionSource(0),
+            ]
+        )]
+    )
+
+    manifest = create_test_manifest("TestPlugin", "1.0.0", "Test", [cap])
+    runtime = PluginRuntime.with_manifest(manifest)
+
+    cli_args = ["mlx-community/Llama-3.2-3B-Instruct-4bit"]
+    cap = runtime.manifest.caps[0]
+    result = runtime._extract_arg_value(cap.args[0], cli_args, None)
+
+    # Should get the string value, not attempt file read
+    value_str = result.decode('utf-8')
+    assert value_str == "mlx-community/Llama-3.2-3B-Instruct-4bit"
+
+
+# TEST344: file-path-array with invalid JSON fails clearly
+def test_344_file_path_array_invalid_json_fails():
+    from capns.cap import CapArg, StdinSource, PositionSource
+    from capns.plugin_runtime import CliError
+
+    cap = create_test_cap(
+        'cap:in="media:bytes";op=batch;out="media:void"',
+        "Test",
+        "batch",
+        [CapArg(
+            media_urn="media:file-path;textable;form=list",
+            required=True,
+            sources=[
+                StdinSource("media:bytes"),
+                PositionSource(0),
+            ]
+        )]
+    )
+
+    manifest = create_test_manifest("TestPlugin", "1.0.0", "Test", [cap])
+    runtime = PluginRuntime.with_manifest(manifest)
+
+    # Pass invalid JSON (not an array)
+    cli_args = ["not a json array"]
+    cap = runtime.manifest.caps[0]
+
+    with pytest.raises(CliError) as exc_info:
+        runtime._extract_arg_value(cap.args[0], cli_args, None)
+
+    err = str(exc_info.value)
+    assert "Failed to parse file-path-array" in err, "Error should mention file-path-array"
+    assert "expected JSON array" in err, "Error should explain expected format"
+
+
+# TEST345: file-path-array with one file failing stops and reports error
+def test_345_file_path_array_one_file_missing_fails_hard(tmp_path):
+    from capns.cap import CapArg, StdinSource, PositionSource
+    from capns.plugin_runtime import IoRuntimeError
+
+    file1 = tmp_path / "test345_exists.txt"
+    file1.write_bytes(b"exists")
+    file2_path = tmp_path / "test345_missing.txt"
+
+    cap = create_test_cap(
+        'cap:in="media:bytes";op=batch;out="media:void"',
+        "Test",
+        "batch",
+        [CapArg(
+            media_urn="media:file-path;textable;form=list",
+            required=True,
+            sources=[
+                StdinSource("media:bytes"),
+                PositionSource(0),
+            ]
+        )]
+    )
+
+    manifest = create_test_manifest("TestPlugin", "1.0.0", "Test", [cap])
+    runtime = PluginRuntime.with_manifest(manifest)
+
+    # Explicitly list both files (one exists, one doesn't)
+    paths_json = json.dumps([
+        str(file1),
+        str(file2_path),  # Doesn't exist!
+    ])
+
+    cli_args = [paths_json]
+    cap = runtime.manifest.caps[0]
+
+    with pytest.raises(IoRuntimeError) as exc_info:
+        runtime._extract_arg_value(cap.args[0], cli_args, None)
+
+    err = str(exc_info.value)
+    assert "test345_missing.txt" in err, "Error should mention the missing file"
+    assert "Failed to read file" in err, "Error should be clear about read failure"
+
+
+# TEST346: Large file (1MB) reads successfully
+def test_346_large_file_reads_successfully(tmp_path):
+    from capns.cap import CapArg, StdinSource, PositionSource
+
+    test_file = tmp_path / "test346_large.bin"
+
+    # Create 1MB file
+    large_data = bytes([42] * 1_000_000)
+    test_file.write_bytes(large_data)
+
+    cap = create_test_cap(
+        'cap:in="media:bytes";op=test;out="media:void"',
+        "Test",
+        "test",
+        [CapArg(
+            media_urn="media:file-path;textable;form=scalar",
+            required=True,
+            sources=[
+                StdinSource("media:bytes"),
+                PositionSource(0),
+            ]
+        )]
+    )
+
+    manifest = create_test_manifest("TestPlugin", "1.0.0", "Test", [cap])
+    runtime = PluginRuntime.with_manifest(manifest)
+
+    cli_args = [str(test_file)]
+    cap = runtime.manifest.caps[0]
+    result = runtime._extract_arg_value(cap.args[0], cli_args, None)
+
+    assert len(result) == 1_000_000, "Should read entire 1MB file"
+    assert result == large_data, "Content should match exactly"
+
+
+# TEST347: Empty file reads as empty bytes
+def test_347_empty_file_reads_as_empty_bytes(tmp_path):
+    from capns.cap import CapArg, StdinSource, PositionSource
+
+    test_file = tmp_path / "test347_empty.txt"
+    test_file.write_bytes(b"")
+
+    cap = create_test_cap(
+        'cap:in="media:bytes";op=test;out="media:void"',
+        "Test",
+        "test",
+        [CapArg(
+            media_urn="media:file-path;textable;form=scalar",
+            required=True,
+            sources=[
+                StdinSource("media:bytes"),
+                PositionSource(0),
+            ]
+        )]
+    )
+
+    manifest = create_test_manifest("TestPlugin", "1.0.0", "Test", [cap])
+    runtime = PluginRuntime.with_manifest(manifest)
+
+    cli_args = [str(test_file)]
+    cap = runtime.manifest.caps[0]
+    result = runtime._extract_arg_value(cap.args[0], cli_args, None)
+
+    assert result == b"", "Empty file should produce empty bytes"
+
+
+# TEST348: file-path conversion respects source order
+def test_348_file_path_conversion_respects_source_order(tmp_path):
+    from capns.cap import CapArg, StdinSource, PositionSource
+
+    test_file = tmp_path / "test348.txt"
+    test_file.write_bytes(b"file content 348")
+
+    # Position source BEFORE stdin source
+    cap = create_test_cap(
+        'cap:in="media:bytes";op=test;out="media:void"',
+        "Test",
+        "test",
+        [CapArg(
+            media_urn="media:file-path;textable;form=scalar",
+            required=True,
+            sources=[
+                PositionSource(0),            # First
+                StdinSource("media:bytes"),  # Second
+            ]
+        )]
+    )
+
+    manifest = create_test_manifest("TestPlugin", "1.0.0", "Test", [cap])
+    runtime = PluginRuntime.with_manifest(manifest)
+
+    cli_args = [str(test_file)]
+    stdin_data = b"stdin content 348"
+    cap = runtime.manifest.caps[0]
+
+    result = runtime._extract_arg_value(cap.args[0], cli_args, stdin_data)
+
+    # Position source tried first, so file is read
+    assert result == b"file content 348", "Position source tried first, file read"
+
+
+# TEST349: file-path arg with multiple sources tries all in order
+def test_349_file_path_multiple_sources_fallback(tmp_path):
+    from capns.cap import CapArg, StdinSource, PositionSource, CliFlagSource
+
+    test_file = tmp_path / "test349.txt"
+    test_file.write_bytes(b"content 349")
+
+    cap = create_test_cap(
+        'cap:in="media:bytes";op=test;out="media:void"',
+        "Test",
+        "test",
+        [CapArg(
+            media_urn="media:file-path;textable;form=scalar",
+            required=True,
+            sources=[
+                CliFlagSource("--file"),     # First (not provided)
+                PositionSource(0),            # Second (provided)
+                StdinSource("media:bytes"),  # Third (not used)
+            ]
+        )]
+    )
+
+    manifest = create_test_manifest("TestPlugin", "1.0.0", "Test", [cap])
+    runtime = PluginRuntime.with_manifest(manifest)
+
+    # Only provide position arg, no --file flag
+    cli_args = [str(test_file)]
+    cap = runtime.manifest.caps[0]
+    result = runtime._extract_arg_value(cap.args[0], cli_args, None)
+
+    assert result == b"content 349", "Should fall back to position source and read file"
+
+
+# TEST350: Integration test - full CLI mode invocation with file-path
+def test_350_full_cli_mode_with_file_path_integration(tmp_path):
+    from capns.cap import CapArg, StdinSource, PositionSource
+
+    test_file = tmp_path / "test350_input.pdf"
+    test_content = b"PDF file content for integration test"
+    test_file.write_bytes(test_content)
+
+    cap = create_test_cap(
+        'cap:in="media:pdf;bytes";op=process;out="media:result;textable"',
+        "Process PDF",
+        "process",
+        [CapArg(
+            media_urn="media:file-path;textable;form=scalar",
+            required=True,
+            sources=[
+                StdinSource("media:pdf;bytes"),
+                PositionSource(0),
+            ]
+        )]
+    )
+
+    manifest = create_test_manifest("TestPlugin", "1.0.0", "Test", [cap])
+    runtime = PluginRuntime.with_manifest(manifest)
+
+    # Track what the handler receives
+    received_payload = []
+
+    def handler(payload, emitter, peer):
+        received_payload.append(payload)
+        return b"processed"
+
+    runtime.register_raw(
+        'cap:in="media:pdf;bytes";op=process;out="media:result;textable"',
+        handler
+    )
+
+    # Simulate full CLI invocation
+    cli_args = [str(test_file)]
+    cap = runtime.manifest.caps[0]
+    raw_payload = runtime.build_payload_from_cli(cap, cli_args)
+
+    # Extract effective payload (what run_cli_mode does)
+    payload = extract_effective_payload(
+        raw_payload,
+        "application/cbor",
+        cap.urn_string()
+    )
+
+    handler_fn = runtime.find_handler(cap.urn_string())
+    emitter = CliStreamEmitter()
+    peer = NoPeerInvoker()
+    result = handler_fn(payload, emitter, peer)
+
+    # Verify handler received file bytes
+    assert received_payload[0] == test_content, "Handler should receive file bytes, not path"
+    assert result == b"processed"
+
+
+# TEST351: file-path-array with empty array succeeds
+def test_351_file_path_array_empty_array():
+    from capns.cap import CapArg, StdinSource, PositionSource
+
+    cap = create_test_cap(
+        'cap:in="media:bytes";op=batch;out="media:void"',
+        "Test",
+        "batch",
+        [CapArg(
+            media_urn="media:file-path;textable;form=list",
+            required=False,  # Not required
+            sources=[
+                StdinSource("media:bytes"),
+                PositionSource(0),
+            ]
+        )]
+    )
+
+    manifest = create_test_manifest("TestPlugin", "1.0.0", "Test", [cap])
+    runtime = PluginRuntime.with_manifest(manifest)
+
+    cli_args = ["[]"]
+    cap = runtime.manifest.caps[0]
+    result = runtime._extract_arg_value(cap.args[0], cli_args, None)
+
+    # Decode CBOR array
+    files_array = cbor2.loads(result)
+
+    assert len(files_array) == 0, "Empty array should produce empty result"
+
+
+# TEST352: file permission denied error is clear (Unix-specific)
+@pytest.mark.skipif(sys.platform == "win32", reason="Unix permissions only")
+def test_352_file_permission_denied_clear_error(tmp_path):
+    from capns.cap import CapArg, StdinSource, PositionSource
+    from capns.plugin_runtime import IoRuntimeError
+    import os
+
+    test_file = tmp_path / "test352_noperm.txt"
+    test_file.write_bytes(b"content")
+
+    # Remove read permissions
+    os.chmod(test_file, 0o000)
+
+    cap = create_test_cap(
+        'cap:in="media:bytes";op=test;out="media:void"',
+        "Test",
+        "test",
+        [CapArg(
+            media_urn="media:file-path;textable;form=scalar",
+            required=True,
+            sources=[
+                StdinSource("media:bytes"),
+                PositionSource(0),
+            ]
+        )]
+    )
+
+    manifest = create_test_manifest("TestPlugin", "1.0.0", "Test", [cap])
+    runtime = PluginRuntime.with_manifest(manifest)
+
+    cli_args = [str(test_file)]
+    cap = runtime.manifest.caps[0]
+
+    try:
+        with pytest.raises(IoRuntimeError) as exc_info:
+            runtime._extract_arg_value(cap.args[0], cli_args, None)
+
+        err = str(exc_info.value)
+        assert "test352_noperm.txt" in err, "Error should mention the file"
+    finally:
+        # Cleanup: restore permissions then delete
+        os.chmod(test_file, 0o644)
+
+
+# TEST353: CBOR payload format matches between CLI and CBOR mode
+def test_353_cbor_payload_format_consistency():
+    from capns.cap import CapArg, StdinSource, PositionSource
+
+    cap = create_test_cap(
+        'cap:in="media:text;textable";op=test;out="media:void"',
+        "Test",
+        "test",
+        [CapArg(
+            media_urn="media:text;textable;form=scalar",
+            required=True,
+            sources=[
+                StdinSource("media:text;textable"),
+                PositionSource(0),
+            ]
+        )]
+    )
+
+    manifest = create_test_manifest("TestPlugin", "1.0.0", "Test", [cap])
+    runtime = PluginRuntime.with_manifest(manifest)
+
+    cli_args = ["test value"]
+    cap = runtime.manifest.caps[0]
+    payload = runtime.build_payload_from_cli(cap, cli_args)
+
+    # Decode CBOR payload
+    args_array = cbor2.loads(payload)
+
+    assert len(args_array) == 1, "Should have 1 argument"
+
+    # Verify structure: { media_urn: "...", value: bytes }
+    arg_map = args_array[0]
+    assert isinstance(arg_map, dict), "Argument should be a dict"
+    assert len(arg_map) == 2, "Argument should have media_urn and value"
+
+    # Check media_urn key
+    assert "media_urn" in arg_map
+    assert arg_map["media_urn"] == "media:text;textable;form=scalar"
+
+    # Check value key
+    assert "value" in arg_map
+    assert arg_map["value"] == b"test value"
+
+
+# TEST354: Glob pattern with no matches produces empty array
+def test_354_glob_pattern_no_matches_empty_array(tmp_path):
+    from capns.cap import CapArg, StdinSource, PositionSource
+
+    cap = create_test_cap(
+        'cap:in="media:bytes";op=batch;out="media:void"',
+        "Test",
+        "batch",
+        [CapArg(
+            media_urn="media:file-path;textable;form=list",
+            required=True,
+            sources=[
+                StdinSource("media:bytes"),
+                PositionSource(0),
+            ]
+        )]
+    )
+
+    manifest = create_test_manifest("TestPlugin", "1.0.0", "Test", [cap])
+    runtime = PluginRuntime.with_manifest(manifest)
+
+    # Glob pattern that matches nothing
+    pattern = f"{tmp_path}/nonexistent_*.xyz"
+    paths_json = json.dumps([pattern])
+
+    cli_args = [paths_json]
+    cap = runtime.manifest.caps[0]
+    result = runtime._extract_arg_value(cap.args[0], cli_args, None)
+
+    # Decode CBOR array
+    files_array = cbor2.loads(result)
+
+    assert len(files_array) == 0, "No matches should produce empty array"
+
+
+# TEST355: Glob pattern skips directories
+def test_355_glob_pattern_skips_directories(tmp_path):
+    from capns.cap import CapArg, StdinSource, PositionSource
+
+    test_dir = tmp_path / "test355"
+    test_dir.mkdir()
+
+    subdir = test_dir / "subdir"
+    subdir.mkdir()
+
+    file1 = test_dir / "file1.txt"
+    file1.write_bytes(b"content1")
+
+    cap = create_test_cap(
+        'cap:in="media:bytes";op=batch;out="media:void"',
+        "Test",
+        "batch",
+        [CapArg(
+            media_urn="media:file-path;textable;form=list",
+            required=True,
+            sources=[
+                StdinSource("media:bytes"),
+                PositionSource(0),
+            ]
+        )]
+    )
+
+    manifest = create_test_manifest("TestPlugin", "1.0.0", "Test", [cap])
+    runtime = PluginRuntime.with_manifest(manifest)
+
+    # Glob that matches both file and directory
+    pattern = f"{test_dir}/*"
+    paths_json = json.dumps([pattern])
+
+    cli_args = [paths_json]
+    cap = runtime.manifest.caps[0]
+    result = runtime._extract_arg_value(cap.args[0], cli_args, None)
+
+    # Decode CBOR array
+    files_array = cbor2.loads(result)
+
+    # Should only include the file, not the directory
+    assert len(files_array) == 1, "Should only include files, not directories"
+    assert files_array[0] == b"content1"
+
+
+# TEST356: Multiple glob patterns combined
+def test_356_multiple_glob_patterns_combined(tmp_path):
+    from capns.cap import CapArg, StdinSource, PositionSource
+
+    test_dir = tmp_path / "test356"
+    test_dir.mkdir()
+
+    file1 = test_dir / "doc.txt"
+    file2 = test_dir / "data.json"
+    file1.write_bytes(b"text")
+    file2.write_bytes(b"json")
+
+    cap = create_test_cap(
+        'cap:in="media:bytes";op=batch;out="media:void"',
+        "Test",
+        "batch",
+        [CapArg(
+            media_urn="media:file-path;textable;form=list",
+            required=True,
+            sources=[
+                StdinSource("media:bytes"),
+                PositionSource(0),
+            ]
+        )]
+    )
+
+    manifest = create_test_manifest("TestPlugin", "1.0.0", "Test", [cap])
+    runtime = PluginRuntime.with_manifest(manifest)
+
+    # Multiple patterns
+    pattern1 = f"{test_dir}/*.txt"
+    pattern2 = f"{test_dir}/*.json"
+    paths_json = json.dumps([pattern1, pattern2])
+
+    cli_args = [paths_json]
+    cap = runtime.manifest.caps[0]
+    result = runtime._extract_arg_value(cap.args[0], cli_args, None)
+
+    # Decode CBOR array
+    files_array = cbor2.loads(result)
+
+    assert len(files_array) == 2, "Should find both files from different patterns"
+
+    # Collect contents (order may vary)
+    contents = sorted(files_array)
+    assert contents == [b"json", b"text"]
+
+
+# TEST357: Symlinks are followed when reading files
+@pytest.mark.skipif(sys.platform == "win32", reason="Unix symlinks only")
+def test_357_symlinks_followed(tmp_path):
+    from capns.cap import CapArg, StdinSource, PositionSource
+    import os
+
+    test_dir = tmp_path / "test357"
+    test_dir.mkdir()
+
+    real_file = test_dir / "real.txt"
+    link_file = test_dir / "link.txt"
+    real_file.write_bytes(b"real content")
+    os.symlink(real_file, link_file)
+
+    cap = create_test_cap(
+        'cap:in="media:bytes";op=test;out="media:void"',
+        "Test",
+        "test",
+        [CapArg(
+            media_urn="media:file-path;textable;form=scalar",
+            required=True,
+            sources=[
+                StdinSource("media:bytes"),
+                PositionSource(0),
+            ]
+        )]
+    )
+
+    manifest = create_test_manifest("TestPlugin", "1.0.0", "Test", [cap])
+    runtime = PluginRuntime.with_manifest(manifest)
+
+    cli_args = [str(link_file)]
+    cap = runtime.manifest.caps[0]
+    result = runtime._extract_arg_value(cap.args[0], cli_args, None)
+
+    assert result == b"real content", "Should follow symlink and read real file"
+
+
+# TEST358: Binary file with non-UTF8 data reads correctly
+def test_358_binary_file_non_utf8(tmp_path):
+    from capns.cap import CapArg, StdinSource, PositionSource
+
+    test_file = tmp_path / "test358.bin"
+
+    # Binary data that's not valid UTF-8
+    binary_data = bytes([0xFF, 0xFE, 0x00, 0x01, 0x80, 0x7F, 0xAB, 0xCD])
+    test_file.write_bytes(binary_data)
+
+    cap = create_test_cap(
+        'cap:in="media:bytes";op=test;out="media:void"',
+        "Test",
+        "test",
+        [CapArg(
+            media_urn="media:file-path;textable;form=scalar",
+            required=True,
+            sources=[
+                StdinSource("media:bytes"),
+                PositionSource(0),
+            ]
+        )]
+    )
+
+    manifest = create_test_manifest("TestPlugin", "1.0.0", "Test", [cap])
+    runtime = PluginRuntime.with_manifest(manifest)
+
+    cli_args = [str(test_file)]
+    cap = runtime.manifest.caps[0]
+    result = runtime._extract_arg_value(cap.args[0], cli_args, None)
+
+    assert result == binary_data, "Binary data should read correctly"
+
+
+# TEST359: Invalid glob pattern fails with clear error
+def test_359_invalid_glob_pattern_fails():
+    from capns.cap import CapArg, StdinSource, PositionSource
+    from capns.plugin_runtime import CliError
+
+    cap = create_test_cap(
+        'cap:in="media:bytes";op=batch;out="media:void"',
+        "Test",
+        "batch",
+        [CapArg(
+            media_urn="media:file-path;textable;form=list",
+            required=True,
+            sources=[
+                StdinSource("media:bytes"),
+                PositionSource(0),
+            ]
+        )]
+    )
+
+    manifest = create_test_manifest("TestPlugin", "1.0.0", "Test", [cap])
+    runtime = PluginRuntime.with_manifest(manifest)
+
+    # Invalid glob pattern (unclosed bracket)
+    pattern = "[invalid"
+    paths_json = json.dumps([pattern])
+
+    cli_args = [paths_json]
+    cap = runtime.manifest.caps[0]
+
+    with pytest.raises(CliError) as exc_info:
+        runtime._extract_arg_value(cap.args[0], cli_args, None)
+
+    err = str(exc_info.value)
+    assert "Invalid glob pattern" in err, "Error should mention invalid glob"
+
+
+# TEST360: Extract effective payload handles file-path data correctly
+def test_360_extract_effective_payload_with_file_data(tmp_path):
+    from capns.cap import CapArg, StdinSource, PositionSource
+
+    test_file = tmp_path / "test360.pdf"
+    pdf_content = b"PDF content for extraction test"
+    test_file.write_bytes(pdf_content)
+
+    cap = create_test_cap(
+        'cap:in="media:pdf;bytes";op=process;out="media:void"',
+        "Process",
+        "process",
+        [CapArg(
+            media_urn="media:file-path;textable;form=scalar",
+            required=True,
+            sources=[
+                StdinSource("media:pdf;bytes"),
+                PositionSource(0),
+            ]
+        )]
+    )
+
+    manifest = create_test_manifest("TestPlugin", "1.0.0", "Test", [cap])
+    runtime = PluginRuntime.with_manifest(manifest)
+
+    cli_args = [str(test_file)]
+    cap = runtime.manifest.caps[0]
+
+    # Build CBOR payload (what build_payload_from_cli does)
+    raw_payload = runtime.build_payload_from_cli(cap, cli_args)
+
+    # Extract effective payload (what run_cli_mode does)
+    effective = extract_effective_payload(
+        raw_payload,
+        "application/cbor",
+        cap.urn_string()
+    )
+
+    # The effective payload should be the raw PDF bytes
+    assert effective == pdf_content, "extract_effective_payload should extract file bytes"

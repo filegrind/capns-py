@@ -46,8 +46,11 @@ import json
 import io
 import threading
 import queue
+import glob
+from pathlib import Path
 from typing import Callable, Protocol, Optional, Dict, List, Any
 from abc import ABC, abstractmethod
+from dataclasses import dataclass
 import cbor2
 
 from .cbor_frame import Frame, FrameType, Limits, MessageId, DEFAULT_MAX_FRAME, DEFAULT_MAX_CHUNK
@@ -56,7 +59,7 @@ from .caller import CapArgumentValue
 from .cap import ArgSource, Cap, CapArg, CliFlagSource
 from .cap_urn import CapUrn
 from .manifest import CapManifest
-from .media_urn import MediaUrn, MediaUrnError
+from .media_urn import MediaUrn, MediaUrnError, MEDIA_FILE_PATH, MEDIA_FILE_PATH_ARRAY
 
 
 class RuntimeError(Exception):
@@ -204,6 +207,14 @@ class PendingPeerRequest:
     def __init__(self):
         # Bounded queue for responses (buffer up to 64 chunks)
         self.queue: queue.Queue = queue.Queue(maxsize=64)
+
+
+@dataclass
+class PendingIncomingRequest:
+    """Internal struct to track incoming requests that are being chunked."""
+    cap_urn: str
+    content_type: Optional[str]
+    chunks: List[bytes]
 
 
 class PeerInvokerImpl:
@@ -667,7 +678,14 @@ class PluginRuntime:
 
         # Build arguments from CLI
         cli_args = args[2:]
-        payload = self.build_payload_from_cli(cap, cli_args)
+        raw_payload = self.build_payload_from_cli(cap, cli_args)
+
+        # Extract effective payload (simulates what CBOR mode does)
+        payload = extract_effective_payload(
+            raw_payload,
+            "application/cbor",
+            cap.urn_string()
+        )
 
         # Create CLI-mode emitter and no-op peer invoker
         emitter = CliStreamEmitter()
@@ -714,6 +732,10 @@ class PluginRuntime:
         pending_peer_requests: Dict[str, PendingPeerRequest] = {}
         pending_lock = threading.Lock()
 
+        # Track incoming requests that are being chunked
+        pending_incoming: Dict[str, PendingIncomingRequest] = {}
+        pending_incoming_lock = threading.Lock()
+
         # Track active handler threads for cleanup
         active_handlers: List[threading.Thread] = []
 
@@ -747,6 +769,20 @@ class PluginRuntime:
                             pass
                     continue
 
+                raw_payload = frame.payload if frame.payload is not None else b""
+
+                # Check if this is a chunked request (empty payload means chunks will follow)
+                if len(raw_payload) == 0:
+                    # Start accumulating chunks for this request
+                    with pending_incoming_lock:
+                        pending_incoming[frame.id.to_string()] = PendingIncomingRequest(
+                            cap_urn=cap_urn,
+                            content_type=frame.content_type,
+                            chunks=[]
+                        )
+                    continue  # Wait for CHUNK/END frames
+
+                # Complete payload in REQ frame - invoke handler immediately
                 handler = self.find_handler(cap_urn)
                 if handler is None:
                     err_frame = Frame.err(
@@ -763,7 +799,6 @@ class PluginRuntime:
 
                 # Clone what we need for the handler thread
                 request_id = frame.id
-                raw_payload = frame.payload if frame.payload is not None else b""
                 content_type = frame.content_type
                 cap_urn_clone = cap_urn
                 max_chunk = self.limits.max_chunk
@@ -858,25 +893,141 @@ class PluginRuntime:
                     except Exception:
                         pass
 
-            elif frame.frame_type in (FrameType.RES, FrameType.CHUNK, FrameType.END):
-                # Response frames from host - route to pending peer request by frame.id
+            elif frame.frame_type == FrameType.CHUNK:
+                # Check if this is a chunk for an incoming request
+                with pending_incoming_lock:
+                    if frame.id.to_string() in pending_incoming:
+                        pending_req = pending_incoming[frame.id.to_string()]
+                        if frame.payload:
+                            pending_req.chunks.append(frame.payload)
+                        continue  # Wait for more chunks or END
+
+                # Not an incoming request chunk - must be a response chunk
                 frame_id_str = frame.id.to_string()
                 with pending_lock:
                     if frame_id_str in pending_peer_requests:
                         pending_req = pending_peer_requests[frame_id_str]
                         payload = frame.payload if frame.payload is not None else b""
+                        pending_req.queue.put(("ok", payload))
 
-                        # CHUNK frames: add to queue, keep request pending
-                        if frame.frame_type == FrameType.CHUNK:
-                            pending_req.queue.put(("ok", payload))
-                        # RES or END frames: final response, mark as complete
-                        elif frame.frame_type == FrameType.RES:
-                            pending_req.queue.put(("ok", payload))
-                            pending_req.queue.put(("end", b""))
-                            del pending_peer_requests[frame_id_str]
-                        elif frame.frame_type == FrameType.END:
-                            pending_req.queue.put(("end", payload))
-                            del pending_peer_requests[frame_id_str]
+            elif frame.frame_type == FrameType.END:
+                # Check if this is the end of an incoming chunked request
+                pending_req = None
+                with pending_incoming_lock:
+                    if frame.id.to_string() in pending_incoming:
+                        pending_req = pending_incoming.pop(frame.id.to_string())
+
+                if pending_req:
+                    # Concatenate all chunks into final payload
+                    if frame.payload:
+                        pending_req.chunks.append(frame.payload)
+                    raw_payload = b''.join(pending_req.chunks)
+
+                    # Find handler
+                    handler = self.find_handler(pending_req.cap_urn)
+                    if not handler:
+                        err_frame = Frame.err(frame.id, "NO_HANDLER", f"No handler registered for cap: {pending_req.cap_urn}")
+                        with writer_lock:
+                            try:
+                                writer.write(err_frame)
+                            except Exception:
+                                pass
+                        continue
+
+                    # Clone what we need for the handler thread
+                    request_id = frame.id
+                    content_type = pending_req.content_type
+                    cap_urn_clone = pending_req.cap_urn
+                    max_chunk = self.limits.max_chunk
+
+                    # Spawn thread to invoke handler (same pattern as REQ handling)
+                    def handle_chunked_request():
+                        emitter = ThreadSafeEmitter(writer, request_id, writer_lock)
+                        peer_invoker = PeerInvokerImpl(writer, writer_lock, pending_peer_requests)
+
+                        # Extract effective payload from arguments if content_type is CBOR
+                        try:
+                            payload = extract_effective_payload(
+                                raw_payload,
+                                content_type,
+                                cap_urn_clone
+                            )
+                        except Exception as e:
+                            # Failed to extract payload - send error response
+                            err_frame = Frame.err(request_id, "PAYLOAD_ERROR", str(e))
+                            with writer_lock:
+                                try:
+                                    writer.write(err_frame)
+                                except Exception as write_err:
+                                    print(f"[PluginRuntime] Failed to write error response: {write_err}", file=sys.stderr)
+                            return
+
+                        # Execute handler and send response with automatic chunking
+                        try:
+                            result = handler(payload, emitter, peer_invoker)
+
+                            # Automatic chunking: split large payloads into CHUNK frames
+                            with writer_lock:
+                                try:
+                                    if len(result) <= max_chunk:
+                                        # Small payload: send single END frame
+                                        end_frame = Frame.end(request_id, result)
+                                        writer.write(end_frame)
+                                    else:
+                                        # Large payload: send CHUNK frames + final END
+                                        offset = 0
+                                        seq = 0
+
+                                        while offset < len(result):
+                                            remaining = len(result) - offset
+                                            chunk_size = min(remaining, max_chunk)
+                                            chunk_data = result[offset:offset + chunk_size]
+                                            offset += chunk_size
+
+                                            if offset < len(result):
+                                                # Not the last chunk - send CHUNK frame
+                                                chunk_frame = Frame.chunk(request_id, seq, chunk_data)
+                                                writer.write(chunk_frame)
+                                                seq += 1
+                                            else:
+                                                # Last chunk - send END frame with remaining data
+                                                end_frame = Frame.end(request_id, chunk_data)
+                                                writer.write(end_frame)
+                                except Exception as e:
+                                    print(f"[PluginRuntime] Failed to write response: {e}", file=sys.stderr)
+                        except Exception as e:
+                            # Handler error
+                            err_frame = Frame.err(request_id, "HANDLER_ERROR", str(e))
+                            with writer_lock:
+                                try:
+                                    writer.write(err_frame)
+                                except Exception as write_err:
+                                    print(f"[PluginRuntime] Failed to write error response: {write_err}", file=sys.stderr)
+
+                    thread = threading.Thread(target=handle_chunked_request, daemon=True)
+                    thread.start()
+                    active_handlers.append(thread)
+                    continue
+
+                # Not an incoming request end - must be a response end
+                frame_id_str = frame.id.to_string()
+                with pending_lock:
+                    if frame_id_str in pending_peer_requests:
+                        pending_req = pending_peer_requests[frame_id_str]
+                        payload = frame.payload if frame.payload is not None else b""
+                        pending_req.queue.put(("end", payload))
+                        del pending_peer_requests[frame_id_str]
+
+            elif frame.frame_type == FrameType.RES:
+                # Response frame from host - route to pending peer request
+                frame_id_str = frame.id.to_string()
+                with pending_lock:
+                    if frame_id_str in pending_peer_requests:
+                        pending_req = pending_peer_requests[frame_id_str]
+                        payload = frame.payload if frame.payload is not None else b""
+                        pending_req.queue.put(("ok", payload))
+                        pending_req.queue.put(("end", b""))
+                        del pending_peer_requests[frame_id_str]
 
             elif frame.frame_type == FrameType.ERR:
                 # Error frame from host - could be response to peer request
@@ -904,111 +1055,11 @@ class PluginRuntime:
                 return cap
         return None
 
-    def build_payload_from_cli(self, cap: Cap, cli_args: List[str]) -> bytes:
-        """Build payload from CLI arguments based on cap's arg definitions."""
-        # Check for stdin data if cap accepts stdin
-        stdin_data = None
-        if cap.accepts_stdin():
-            stdin_data = self.read_stdin_if_available()
+    def _get_positional_args(self, args: List[str]) -> List[str]:
+        """Get positional arguments (non-flag arguments).
 
-        # If no arguments are defined but stdin data exists, use it as raw payload
-        if not cap.get_args() and stdin_data is not None:
-            return stdin_data
-
-        # Build JSON object directly from cap arg definitions
-        json_obj = {}
-        for arg_def in cap.get_args():
-            value = self.extract_arg_value(arg_def, cli_args, stdin_data)
-
-            if value is None:
-                if arg_def.required:
-                    raise MissingArgumentError(f"Required argument '{arg_def.media_urn}' not provided")
-                continue
-
-            # Validate media URN
-            try:
-                MediaUrn.from_string(arg_def.media_urn)
-            except MediaUrnError as e:
-                raise CliError(f"Invalid media URN '{arg_def.media_urn}': {e}")
-
-            # Parse value as JSON or string
-            try:
-                parsed_value = json.loads(value)
-            except Exception:
-                try:
-                    parsed_value = value.decode('utf-8')
-                except UnicodeDecodeError:
-                    raise CliError("Binary data cannot be passed via CLI flags. Use stdin instead.")
-
-            # Extract CLI flag name from sources to use as JSON key
-            cli_flag_key = None
-            for source in arg_def.sources:
-                if isinstance(source, CliFlagSource):
-                    # Strip leading dashes and convert to valid JSON key
-                    cli_flag_key = source.cli_flag.lstrip('-').replace('-', '_')
-                    break
-
-            if cli_flag_key is None:
-                # No CLI flag source - this shouldn't happen in CLI mode but fail gracefully
-                raise CliError(f"Argument '{arg_def.media_urn}' has no CLI flag source")
-
-            json_obj[cli_flag_key] = parsed_value
-
-        if not json_obj:
-            # No arguments - return empty object
-            return b'{}'
-
-        return json.dumps(json_obj).encode('utf-8')
-
-    def extract_arg_value(
-        self,
-        arg_def: CapArg,
-        cli_args: List[str],
-        stdin_data: Optional[bytes]
-    ) -> Optional[bytes]:
-        """Extract a single argument value from CLI args or stdin."""
-        # Try each source in order
-        for source in arg_def.sources:
-            if isinstance(source, dict) and 'cli_flag' in source:
-                value = self.get_cli_flag_value(cli_args, source['cli_flag'])
-                if value is not None:
-                    return value.encode('utf-8')
-            elif isinstance(source, dict) and 'position' in source:
-                # Positional args: filter out flags and their values
-                positional = self.get_positional_args(cli_args)
-                pos = source['position']
-                if pos < len(positional):
-                    return positional[pos].encode('utf-8')
-            elif isinstance(source, dict) and 'stdin' in source:
-                if stdin_data is not None:
-                    return stdin_data
-
-        # Try default value
-        if arg_def.default_value is not None:
-            try:
-                return json.dumps(arg_def.default_value).encode('utf-8')
-            except Exception as e:
-                raise SerializeError(str(e))
-
-        return None
-
-    def get_cli_flag_value(self, args: List[str], flag: str) -> Optional[str]:
-        """Get value for a CLI flag (e.g., --model "value")"""
-        i = 0
-        while i < len(args):
-            arg = args[i]
-            if arg == flag:
-                if i + 1 < len(args):
-                    return args[i + 1]
-                return None
-            # Handle --flag=value format
-            if arg.startswith(f"{flag}="):
-                return arg[len(flag)+1:]
-            i += 1
-        return None
-
-    def get_positional_args(self, args: List[str]) -> List[str]:
-        """Get positional arguments (non-flag arguments)"""
+        Filters out CLI flags (starting with '-') and their values.
+        """
         positional = []
         skip_next = False
 
@@ -1025,16 +1076,305 @@ class PluginRuntime:
 
         return positional
 
-    def read_stdin_if_available(self) -> Optional[bytes]:
-        """Read stdin if data is available (non-blocking check)."""
+    def _get_cli_flag_value(self, args: List[str], flag: str) -> Optional[str]:
+        """Get value for a CLI flag (e.g., --model "value").
+
+        Supports both formats:
+        - --flag value
+        - --flag=value
+        """
+        i = 0
+        while i < len(args):
+            arg = args[i]
+            if arg == flag:
+                if i + 1 < len(args):
+                    return args[i + 1]
+                return None
+            # Handle --flag=value format
+            if arg.startswith(f"{flag}="):
+                return arg[len(flag) + 1:]
+            i += 1
+        return None
+
+    def _read_stdin_if_available(self) -> Optional[bytes]:
+        """Read stdin if data is available (non-blocking check).
+
+        Returns None if stdin is a terminal (interactive) or if empty.
+        """
         # Don't read from stdin if it's a terminal (interactive)
         if sys.stdin.isatty():
             return None
 
-        data = sys.stdin.buffer.read()
-        if not data:
+        # Check if we're in a test environment where stdin is captured
+        # (DontReadFromInput from pytest)
+        if hasattr(sys.stdin, 'read') and 'DontReadFromInput' in type(sys.stdin).__name__:
             return None
-        return data
+
+        try:
+            data = sys.stdin.buffer.read()
+            if not data:
+                return None
+            return data
+        except (OSError, IOError):
+            # stdin not available or can't be read
+            return None
+
+    def _read_file_path_to_bytes(self, path_value: str, is_array: bool) -> bytes:
+        """Read file(s) for file-path arguments and return bytes.
+
+        This method implements automatic file-path to bytes conversion when:
+        - arg.media_urn is "media:file-path" or "media:file-path-array"
+        - arg has a stdin source (indicating bytes are the canonical type)
+
+        Args:
+            path_value: File path string (single path or JSON array of path patterns)
+            is_array: True if media:file-path-array (read multiple files with glob expansion)
+
+        Returns:
+            - For single file: bytes containing raw file bytes
+            - For array: CBOR-encoded array of file bytes (each element is one file's contents)
+
+        Raises:
+            RuntimeError: If file cannot be read with clear error message
+        """
+        if is_array:
+            # Parse JSON array of path patterns
+            try:
+                path_patterns = json.loads(path_value)
+            except json.JSONDecodeError as e:
+                raise CliError(
+                    f"Failed to parse file-path-array: expected JSON array of path patterns, "
+                    f"got '{path_value}': {e}"
+                )
+
+            if not isinstance(path_patterns, list):
+                raise CliError(
+                    f"Failed to parse file-path-array: expected JSON array of path patterns, "
+                    f"got '{path_value}'"
+                )
+
+            # Expand globs and collect all file paths
+            all_files = []
+            for pattern in path_patterns:
+                # Check if this is a literal path (no glob metacharacters) or a glob pattern
+                is_glob = '*' in pattern or '?' in pattern or '[' in pattern
+
+                if not is_glob:
+                    # Literal path - verify it exists and is a file
+                    path = Path(pattern)
+                    if not path.exists():
+                        raise IoRuntimeError(
+                            f"Failed to read file '{pattern}' from file-path-array: "
+                            f"No such file or directory"
+                        )
+                    if path.is_file():
+                        all_files.append(path)
+                    # Skip directories silently for consistency with glob behavior
+                else:
+                    # Glob pattern - expand it
+                    # Python's glob doesn't validate patterns, but we can check for common errors
+                    # Check for unclosed brackets
+                    bracket_count = 0
+                    for char in pattern:
+                        if char == '[':
+                            bracket_count += 1
+                        elif char == ']':
+                            bracket_count -= 1
+                            if bracket_count < 0:
+                                raise CliError(f"Invalid glob pattern '{pattern}': unmatched ']'")
+                    if bracket_count != 0:
+                        raise CliError(f"Invalid glob pattern '{pattern}': unclosed '['")
+
+                    try:
+                        paths = glob.glob(pattern)
+                    except Exception as e:
+                        raise CliError(f"Invalid glob pattern '{pattern}': {e}")
+
+                    for path_str in paths:
+                        path = Path(path_str)
+                        # Only include files (skip directories)
+                        if path.is_file():
+                            all_files.append(path)
+
+            # Read each file sequentially
+            files_data = []
+            for path in all_files:
+                try:
+                    file_bytes = path.read_bytes()
+                    files_data.append(file_bytes)
+                except IOError as e:
+                    raise IoRuntimeError(
+                        f"Failed to read file '{path}' from file-path-array: {e}"
+                    )
+
+            # Encode as CBOR array
+            try:
+                return cbor2.dumps(files_data)
+            except Exception as e:
+                raise SerializeError(f"Failed to encode CBOR array: {e}")
+        else:
+            # Single file path - read and return raw bytes
+            try:
+                path = Path(path_value)
+                return path.read_bytes()
+            except IOError as e:
+                raise IoRuntimeError(f"Failed to read file '{path_value}': {e}")
+
+    def build_payload_from_cli(self, cap: Cap, cli_args: List[str]) -> bytes:
+        """Build payload from CLI arguments based on cap's arg definitions.
+
+        Returns CBOR-encoded array of CapArgumentValue objects.
+        This matches the format used in CBOR mode for consistency.
+        """
+        # Check for stdin data if cap accepts stdin
+        stdin_data = None
+        if cap.accepts_stdin():
+            stdin_data = self._read_stdin_if_available()
+
+        # If no arguments are defined but stdin data exists, use it as raw payload
+        if not cap.get_args() and stdin_data is not None:
+            return stdin_data
+
+        # Build list of CapArgumentValue objects
+        arguments: List[CapArgumentValue] = []
+
+        for arg_def in cap.get_args():
+            value = self._extract_arg_value(arg_def, cli_args, stdin_data)
+
+            if value is None:
+                if arg_def.required:
+                    raise MissingArgumentError(f"Required argument '{arg_def.media_urn}' not provided")
+                continue
+
+            # Validate media URN
+            try:
+                arg_media_urn = MediaUrn.from_string(arg_def.media_urn)
+            except MediaUrnError as e:
+                raise CliError(f"Invalid media URN '{arg_def.media_urn}': {e}")
+
+            # Check if this arg requires file-path to bytes conversion
+            from .cap import StdinSource
+
+            file_path_pattern = MediaUrn.from_string(MEDIA_FILE_PATH)
+            file_path_array_pattern = MediaUrn.from_string(MEDIA_FILE_PATH_ARRAY)
+
+            # Check array first (more specific), then single file-path
+            is_array = file_path_array_pattern.accepts(arg_media_urn)
+            is_file_path = is_array or file_path_pattern.accepts(arg_media_urn)
+
+            # Get stdin source media URN if it exists (tells us target type)
+            has_stdin_source = any(
+                isinstance(s, StdinSource)
+                for s in arg_def.sources
+            )
+
+            # If file-path type with stdin source, use stdin's media URN instead
+            if is_file_path and has_stdin_source:
+                # Find the stdin source to get its media URN
+                stdin_media_urn = None
+                for source in arg_def.sources:
+                    if isinstance(source, StdinSource):
+                        stdin_media_urn = source.stdin
+                        break
+
+                if stdin_media_urn:
+                    # Use stdin's media URN as the argument media URN (bytes, not file-path)
+                    arguments.append(CapArgumentValue(
+                        media_urn=stdin_media_urn,
+                        value=value
+                    ))
+                else:
+                    # Fallback to arg's media URN
+                    arguments.append(CapArgumentValue(
+                        media_urn=arg_def.media_urn,
+                        value=value
+                    ))
+            else:
+                # Not a file-path type, use arg's media URN
+                arguments.append(CapArgumentValue(
+                    media_urn=arg_def.media_urn,
+                    value=value
+                ))
+
+        # If we have arguments, encode as CBOR array
+        if arguments:
+            cbor_args = [
+                {
+                    "media_urn": arg.media_urn,
+                    "value": arg.value
+                }
+                for arg in arguments
+            ]
+            return cbor2.dumps(cbor_args)
+
+        # No arguments and no stdin
+        return b''
+
+    def _extract_arg_value(
+        self,
+        arg_def: CapArg,
+        cli_args: List[str],
+        stdin_data: Optional[bytes]
+    ) -> Optional[bytes]:
+        """Extract a single argument value from CLI args or stdin.
+
+        This method implements automatic file-path to bytes conversion when:
+        - arg.media_urn is "media:file-path" or "media:file-path-array"
+        - arg has a stdin source (indicating bytes are the canonical type)
+        """
+        from .cap import StdinSource, PositionSource, CliFlagSource
+
+        # Check if this arg requires file-path to bytes conversion using proper URN matching
+        try:
+            arg_media_urn = MediaUrn.from_string(arg_def.media_urn)
+        except MediaUrnError as e:
+            raise CliError(f"Invalid media URN '{arg_def.media_urn}': {e}")
+
+        file_path_pattern = MediaUrn.from_string(MEDIA_FILE_PATH)
+        file_path_array_pattern = MediaUrn.from_string(MEDIA_FILE_PATH_ARRAY)
+
+        # Check array first (more specific), then single file-path
+        is_array = file_path_array_pattern.accepts(arg_media_urn)
+        is_file_path = is_array or file_path_pattern.accepts(arg_media_urn)
+
+        # Get stdin source media URN if it exists (tells us target type)
+        has_stdin_source = any(
+            isinstance(s, StdinSource)
+            for s in arg_def.sources
+        )
+
+        # Try each source in order
+        for source in arg_def.sources:
+            if isinstance(source, CliFlagSource):
+                value = self._get_cli_flag_value(cli_args, source.cli_flag)
+                if value is not None:
+                    # If file-path type with stdin source, read file(s)
+                    if is_file_path and has_stdin_source:
+                        return self._read_file_path_to_bytes(value, is_array)
+                    return value.encode('utf-8')
+            elif isinstance(source, PositionSource):
+                # Positional args: filter out flags and their values
+                positional = self._get_positional_args(cli_args)
+                pos = source.position
+                if pos < len(positional):
+                    value = positional[pos]
+                    # If file-path type with stdin source, read file(s)
+                    if is_file_path and has_stdin_source:
+                        return self._read_file_path_to_bytes(value, is_array)
+                    return value.encode('utf-8')
+            elif isinstance(source, StdinSource):
+                if stdin_data is not None:
+                    return stdin_data
+
+        # Try default value
+        if arg_def.default_value is not None:
+            try:
+                return json.dumps(arg_def.default_value).encode('utf-8')
+            except Exception as e:
+                raise SerializeError(str(e))
+
+        return None
+
 
     def print_help(self, manifest: CapManifest) -> None:
         """Print help message showing all available subcommands."""

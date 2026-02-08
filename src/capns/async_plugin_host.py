@@ -410,17 +410,68 @@ class AsyncPluginHost:
             raise Closed()
 
         request_id = MessageId.new_uuid()
-        request = Frame.req(request_id, cap_urn, payload, content_type)
 
         # Create queue for responses
         queue = asyncio.Queue(maxsize=32)
         self._state.pending[request_id] = queue
 
-        # Send request
-        try:
-            await self._writer_queue.put(WriteFrame(request))
-        except:
-            raise SendError()
+        max_chunk = self.limits.max_chunk
+
+        # Automatic chunking for large request payloads (or empty payloads to avoid ambiguity)
+        if 0 < len(payload) <= max_chunk:
+            # Small non-empty payload: send single REQ frame with full payload
+            request = Frame.req(request_id, cap_urn, payload, content_type)
+            try:
+                await self._writer_queue.put(WriteFrame(request))
+            except:
+                raise SendError()
+        else:
+            # Empty or large payload: send REQ + CHUNK frames + END
+            print(f"[AsyncPluginHost] request: large payload ({len(payload)} bytes), chunking with max_chunk={max_chunk}")
+
+            # Send initial REQ frame with cap_urn and content_type, but empty payload
+            request = Frame.req(request_id, cap_urn, b"", content_type)
+            try:
+                await self._writer_queue.put(WriteFrame(request))
+            except:
+                raise SendError()
+
+            # Send payload in CHUNK frames
+            offset = 0
+            seq = 0
+
+            if len(payload) == 0:
+                # Empty payload: send END frame immediately with no chunks
+                end_frame = Frame.end(request_id, b"")
+                try:
+                    await self._writer_queue.put(WriteFrame(end_frame))
+                except:
+                    raise SendError()
+            else:
+                # Non-empty payload: send CHUNK frames + END
+                while offset < len(payload):
+                    remaining = len(payload) - offset
+                    chunk_size = min(remaining, max_chunk)
+                    chunk_data = payload[offset:offset + chunk_size]
+                    offset += chunk_size
+
+                    if offset < len(payload):
+                        # Not the last chunk - send CHUNK frame
+                        chunk_frame = Frame.chunk(request_id, seq, chunk_data)
+                        try:
+                            await self._writer_queue.put(WriteFrame(chunk_frame))
+                        except:
+                            raise SendError()
+                        seq += 1
+                    else:
+                        # Last chunk - send END frame
+                        end_frame = Frame.end(request_id, chunk_data)
+                        try:
+                            await self._writer_queue.put(WriteFrame(end_frame))
+                        except:
+                            raise SendError()
+
+            print(f"[AsyncPluginHost] request: sent {seq} chunk frames + END for request_id={request_id}")
 
         return queue
 
