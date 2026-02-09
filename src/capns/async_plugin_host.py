@@ -36,6 +36,8 @@ import asyncio
 from typing import Optional, List, Dict
 from dataclasses import dataclass
 
+import io
+import cbor2
 from capns.cbor_frame import Frame, FrameType, Limits, MessageId
 from capns.cbor_io import handshake_async, AsyncFrameReader, AsyncFrameWriter, CborError
 from capns.caller import CapArgumentValue
@@ -272,11 +274,12 @@ class RequestState:
 class HostState:
     """Internal shared state for the async plugin host"""
 
-    def __init__(self):
+    def __init__(self, limits: Limits = None):
         self.pending: Dict[MessageId, RequestState] = {}
         self.pending_heartbeats: set = set()
         self.closed: bool = False
         self.capabilities: Dict[str, callable] = {}  # cap_urn -> async handler function
+        self.limits: Limits = limits or Limits.default()
 
 
 class AsyncPluginHost:
@@ -329,7 +332,7 @@ class AsyncPluginHost:
 
         # Create queues and state
         writer_queue = asyncio.Queue(maxsize=64)
-        state = HostState()
+        state = HostState(limits=limits)
 
         # Start writer task
         writer_task = asyncio.create_task(cls._writer_loop(writer, writer_queue))
@@ -452,15 +455,15 @@ class AsyncPluginHost:
 
                     elif frame.frame_type == FrameType.END:
                         req_state.ended = True
-                        if frame.payload:
-                            chunk = ResponseChunk(
-                                payload=frame.payload,
-                                seq=frame.seq,
-                                offset=frame.offset,
-                                len=frame.len,
-                                is_eof=True,
-                            )
-                            await req_state.queue.put(chunk)
+                        # Always send a terminal EOF chunk so _collect_response exits
+                        chunk = ResponseChunk(
+                            payload=frame.payload or b"",
+                            seq=frame.seq,
+                            offset=frame.offset,
+                            len=frame.len,
+                            is_eof=True,
+                        )
+                        await req_state.queue.put(chunk)
                         should_remove = True
 
                     elif frame.frame_type == FrameType.LOG:
@@ -670,7 +673,12 @@ class AsyncPluginHost:
 
     @staticmethod
     async def _collect_response(queue: asyncio.Queue) -> PluginResponse:
-        """Collect all response chunks from a queue into a PluginResponse"""
+        """Collect all response chunks from a queue into a PluginResponse.
+
+        Protocol v2: Data arrives in CHUNK frames (is_eof=False), END frame
+        terminates with is_eof=True and empty payload. We concatenate all
+        chunk payloads into a single response.
+        """
         chunks = []
 
         while True:
@@ -688,10 +696,49 @@ class AsyncPluginHost:
         if not chunks:
             raise RecvError()
 
-        if len(chunks) == 1 and chunks[0].seq == 0:
-            return PluginResponse.single(chunks[0].payload)
+        # Protocol v2: Concatenate all chunk payloads, then CBOR-decode.
+        # Plugin emitters CBOR-encode each emission as a CBOR value.
+        # Multiple emissions produce multiple CBOR values concatenated.
+        all_data = bytearray()
+        for c in chunks:
+            if c.payload:
+                all_data.extend(c.payload)
+
+        raw = bytes(all_data)
+        if not raw:
+            return PluginResponse.single(b"")
+
+        # Decode all CBOR values from concatenated stream
+        decoded_chunks = []
+        decoder = cbor2.CBORDecoder(io.BytesIO(raw))
+        seq = 0
+        while True:
+            try:
+                value = decoder.decode()
+                if isinstance(value, bytes):
+                    payload = value
+                elif isinstance(value, str):
+                    payload = value.encode("utf-8")
+                else:
+                    import json
+                    payload = json.dumps(value).encode("utf-8")
+                decoded_chunks.append(ResponseChunk(
+                    payload=payload, seq=seq, offset=None, len=None, is_eof=False
+                ))
+                seq += 1
+            except Exception:
+                break
+
+        if not decoded_chunks:
+            return PluginResponse.single(b"")
+
+        # Mark last chunk as EOF
+        decoded_chunks[-1].is_eof = True
+
+        if len(decoded_chunks) == 1:
+            return PluginResponse.single(decoded_chunks[0].payload)
         else:
-            return PluginResponse.streaming(chunks)
+            return PluginResponse.streaming(decoded_chunks)
 
     def get_limits(self) -> Limits:
         """Get the negotiated protocol limits"""
@@ -853,14 +900,17 @@ class AsyncPluginHost:
                 # STREAM_START
                 await writer_queue.put(WriteFrame(Frame.stream_start(frame.id, peer_stream_id, peer_media_urn)))
 
+                # CBOR-encode the result (matches Rust emit_cbor behavior)
+                cbor_result = cbor2.dumps(result) if result else b""
+
                 # CHUNK(s) with stream_id
-                if result:
-                    max_chunk = self._limits.max_chunk
+                if cbor_result:
+                    max_chunk = state.limits.max_chunk
                     offset = 0
                     seq = 0
-                    while offset < len(result):
-                        chunk_size = min(len(result) - offset, max_chunk)
-                        chunk_data = result[offset:offset + chunk_size]
+                    while offset < len(cbor_result):
+                        chunk_size = min(len(cbor_result) - offset, max_chunk)
+                        chunk_data = cbor_result[offset:offset + chunk_size]
                         offset += chunk_size
                         await writer_queue.put(WriteFrame(Frame.chunk(frame.id, peer_stream_id, seq, chunk_data)))
                         seq += 1

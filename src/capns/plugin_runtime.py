@@ -402,13 +402,19 @@ class ThreadSafeEmitter:
                     self.writer.write(start_frame)
 
     def emit_bytes(self, payload: bytes) -> None:
+        """CBOR-encode payload as a byte string and send as CHUNK frame(s).
+        Matches Rust emit_cbor behavior — all emissions are CBOR-encoded.
+        """
         self._ensure_stream_started()
 
-        # Auto-chunk large payloads
+        # CBOR-encode the payload as a CBOR byte string (matches Rust emit_cbor)
+        cbor_payload = cbor2.dumps(payload)
+
+        # Auto-chunk the CBOR-encoded payload
         offset = 0
-        while offset < len(payload):
-            chunk_size = min(self.max_chunk, len(payload) - offset)
-            chunk_data = payload[offset:offset + chunk_size]
+        while offset < len(cbor_payload):
+            chunk_size = min(self.max_chunk, len(cbor_payload) - offset)
+            chunk_data = cbor_payload[offset:offset + chunk_size]
             offset += chunk_size
 
             with self.seq_lock:
