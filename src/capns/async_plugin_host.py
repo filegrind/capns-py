@@ -900,17 +900,19 @@ class AsyncPluginHost:
                 # STREAM_START
                 await writer_queue.put(WriteFrame(Frame.stream_start(frame.id, peer_stream_id, peer_media_urn)))
 
-                # CBOR-encode the result (matches Rust emit_cbor behavior)
-                cbor_result = cbor2.dumps(result) if result else b""
+                # Send raw result bytes (NOT CBOR-encoded).
+                # The Rust host sends chunk.payload directly — peer invokers
+                # in all languages expect raw bytes, not CBOR-wrapped values.
+                raw_result = result if result else b""
 
                 # CHUNK(s) with stream_id
-                if cbor_result:
+                if raw_result:
                     max_chunk = state.limits.max_chunk
                     offset = 0
                     seq = 0
-                    while offset < len(cbor_result):
-                        chunk_size = min(len(cbor_result) - offset, max_chunk)
-                        chunk_data = cbor_result[offset:offset + chunk_size]
+                    while offset < len(raw_result):
+                        chunk_size = min(len(raw_result) - offset, max_chunk)
+                        chunk_data = raw_result[offset:offset + chunk_size]
                         offset += chunk_size
                         await writer_queue.put(WriteFrame(Frame.chunk(frame.id, peer_stream_id, seq, chunk_data)))
                         seq += 1
