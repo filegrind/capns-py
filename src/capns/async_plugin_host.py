@@ -596,69 +596,60 @@ class AsyncPluginHost:
         import uuid
         stream_id = str(uuid.uuid4())
 
-        # Automatic chunking for large request payloads (or empty payloads to avoid ambiguity)
-        if 0 < len(payload) <= max_chunk:
-            # Small non-empty payload: send single REQ frame with full payload
-            request = Frame.req(request_id, cap_urn, payload, content_type)
-            try:
-                await self._writer_queue.put(WriteFrame(request))
-            except:
-                raise SendError()
-        else:
-            # Empty or large payload: use Protocol v2 stream multiplexing
-            # REQ (empty) + STREAM_START + CHUNK frames + STREAM_END + END
-            print(f"[AsyncPluginHost] request: large/empty payload ({len(payload)} bytes), using Protocol v2 streams with max_chunk={max_chunk}")
+        # Protocol v2: ALL requests use stream multiplexing (no backward compatibility)
+        # REQ (empty) + STREAM_START + CHUNK frames (if non-empty) + STREAM_END + END
+        print(f"[AsyncPluginHost] request: payload ({len(payload)} bytes), using Protocol v2 streams with max_chunk={max_chunk}")
 
-            # Send initial REQ frame with cap_urn and content_type, but empty payload
-            request = Frame.req(request_id, cap_urn, b"", content_type)
-            try:
-                await self._writer_queue.put(WriteFrame(request))
-            except:
-                raise SendError()
+        # Send initial REQ frame with cap_urn and content_type, but empty payload
+        request = Frame.req(request_id, cap_urn, b"", content_type)
+        try:
+            await self._writer_queue.put(WriteFrame(request))
+        except:
+            raise SendError()
 
-            # Send STREAM_START
-            stream_start = Frame.stream_start(request_id, stream_id, "media:bytes")
-            try:
-                await self._writer_queue.put(WriteFrame(stream_start))
-            except:
-                raise SendError()
+        # Send STREAM_START
+        stream_start = Frame.stream_start(request_id, stream_id, "media:bytes")
+        try:
+            await self._writer_queue.put(WriteFrame(stream_start))
+        except:
+            raise SendError()
 
-            # Send payload in CHUNK frames with stream_id
-            offset = 0
-            seq = 0
+        # Send payload in CHUNK frames with stream_id
+        offset = 0
+        seq = 0
 
-            if len(payload) > 0:
-                # Non-empty payload: send CHUNK frames
-                while offset < len(payload):
-                    remaining = len(payload) - offset
-                    chunk_size = min(remaining, max_chunk)
-                    chunk_data = payload[offset:offset + chunk_size]
-                    offset += chunk_size
+        if len(payload) > 0:
+            # Non-empty payload: send CHUNK frames
+            while offset < len(payload):
+                remaining = len(payload) - offset
+                chunk_size = min(remaining, max_chunk)
+                chunk_data = payload[offset:offset + chunk_size]
+                offset += chunk_size
 
-                    # Send CHUNK frame with stream_id
-                    chunk_frame = Frame.chunk(request_id, seq, chunk_data)
-                    chunk_frame.stream_id = stream_id  # Set stream_id for Protocol v2
-                    try:
-                        await self._writer_queue.put(WriteFrame(chunk_frame))
-                    except:
-                        raise SendError()
-                    seq += 1
+                # Send CHUNK frame with stream_id
+                chunk_frame = Frame.chunk(request_id, seq, chunk_data)
+                chunk_frame.stream_id = stream_id  # Set stream_id for Protocol v2
+                try:
+                    await self._writer_queue.put(WriteFrame(chunk_frame))
+                except:
+                    raise SendError()
+                seq += 1
 
-            # Send STREAM_END
-            stream_end = Frame.stream_end(request_id, stream_id)
-            try:
-                await self._writer_queue.put(WriteFrame(stream_end))
-            except:
-                raise SendError()
+        # Send STREAM_END
+        stream_end = Frame.stream_end(request_id, stream_id)
+        try:
+            await self._writer_queue.put(WriteFrame(stream_end))
+        except:
+            raise SendError()
 
-            # Send END frame
-            end_frame = Frame.end(request_id, None)
-            try:
-                await self._writer_queue.put(WriteFrame(end_frame))
-            except:
-                raise SendError()
+        # Send END frame
+        end_frame = Frame.end(request_id, None)
+        try:
+            await self._writer_queue.put(WriteFrame(end_frame))
+        except:
+            raise SendError()
 
-            print(f"[AsyncPluginHost] request: sent STREAM_START + {seq} CHUNK frames + STREAM_END + END for request_id={request_id}")
+        print(f"[AsyncPluginHost] request: sent STREAM_START + {seq} CHUNK frames + STREAM_END + END for request_id={request_id}")
 
         return queue
 
