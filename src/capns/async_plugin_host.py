@@ -445,15 +445,9 @@ class AsyncPluginHost:
                             await req_state.queue.put(Protocol(f"CHUNK error: {e}"))
                             should_remove = True
 
-                    elif frame.frame_type == FrameType.RES:
-                        chunk = ResponseChunk(
-                            payload=frame.payload or b"",
-                            seq=0,
-                            offset=None,
-                            len=None,
-                            is_eof=True,
-                        )
-                        await req_state.queue.put(chunk)
+                    elif frame.frame_type.value == 2:
+                        # RES frame removed in Protocol v2 — fail hard
+                        await req_state.queue.put(Protocol("RES frame (type 2) is not supported in Protocol v2. Use STREAM_START/CHUNK/STREAM_END/END."))
                         should_remove = True
 
                     elif frame.frame_type == FrameType.END:
@@ -626,9 +620,8 @@ class AsyncPluginHost:
                 chunk_data = payload[offset:offset + chunk_size]
                 offset += chunk_size
 
-                # Send CHUNK frame with stream_id
-                chunk_frame = Frame.chunk(request_id, seq, chunk_data)
-                chunk_frame.stream_id = stream_id  # Set stream_id for Protocol v2
+                # Send CHUNK frame with stream_id (Protocol v2)
+                chunk_frame = Frame.chunk(request_id, stream_id, seq, chunk_data)
                 try:
                     await self._writer_queue.put(WriteFrame(chunk_frame))
                 except:
@@ -852,9 +845,31 @@ class AsyncPluginHost:
 
                 result = await handler(payload)
 
-                # Send RES frame with result
-                res_frame = Frame.res(frame.id, result, frame.content_type or "media:bytes")
-                await writer_queue.put(WriteFrame(res_frame))
+                # Protocol v2: Send response using stream multiplexing
+                import uuid
+                peer_stream_id = str(uuid.uuid4())
+                peer_media_urn = frame.content_type or "media:bytes"
+
+                # STREAM_START
+                await writer_queue.put(WriteFrame(Frame.stream_start(frame.id, peer_stream_id, peer_media_urn)))
+
+                # CHUNK(s) with stream_id
+                if result:
+                    max_chunk = self._limits.max_chunk
+                    offset = 0
+                    seq = 0
+                    while offset < len(result):
+                        chunk_size = min(len(result) - offset, max_chunk)
+                        chunk_data = result[offset:offset + chunk_size]
+                        offset += chunk_size
+                        await writer_queue.put(WriteFrame(Frame.chunk(frame.id, peer_stream_id, seq, chunk_data)))
+                        seq += 1
+
+                # STREAM_END
+                await writer_queue.put(WriteFrame(Frame.stream_end(frame.id, peer_stream_id)))
+
+                # END
+                await writer_queue.put(WriteFrame(Frame.end(frame.id, None)))
 
             except Exception as e:
                 # Handler error - send ERR frame

@@ -24,7 +24,6 @@ Each frame is a CBOR map with integer keys:
 
 - HELLO (0): Handshake to negotiate limits
 - REQ (1): Request to invoke a cap
-- RES (2): Single complete response
 - CHUNK (3): Streaming data chunk
 - END (4): Stream complete marker
 - LOG (5): Log/progress message
@@ -53,7 +52,7 @@ class FrameType(IntEnum):
     """Frame type discriminator"""
     HELLO = 0  # Handshake frame for negotiating limits
     REQ = 1  # Request to invoke a cap
-    RES = 2  # Single complete response
+    # RES (2) removed in Protocol v2 — use STREAM_START/CHUNK/STREAM_END/END
     CHUNK = 3  # Streaming data chunk
     END = 4  # Stream complete marker
     LOG = 5  # Log/progress message
@@ -277,17 +276,10 @@ class Frame:
         return frame
 
     @classmethod
-    def res(cls, id: MessageId, payload: bytes, content_type: str) -> "Frame":
-        """Create a RES frame for a single response"""
-        frame = cls.new(FrameType.RES, id)
-        frame.payload = payload
-        frame.content_type = content_type
-        return frame
-
-    @classmethod
-    def chunk(cls, id: MessageId, seq: int, payload: bytes) -> "Frame":
-        """Create a CHUNK frame for streaming"""
-        frame = cls.new(FrameType.CHUNK, id)
+    def chunk(cls, req_id: MessageId, stream_id: str, seq: int, payload: bytes) -> "Frame":
+        """Create a CHUNK frame for streaming (Protocol v2: stream_id required)"""
+        frame = cls.new(FrameType.CHUNK, req_id)
+        frame.stream_id = stream_id
         frame.seq = seq
         frame.payload = payload
         return frame
@@ -295,15 +287,17 @@ class Frame:
     @classmethod
     def chunk_with_offset(
         cls,
-        id: MessageId,
+        req_id: MessageId,
+        stream_id: str,
         seq: int,
         payload: bytes,
         offset: int,
         total_len: Optional[int],
         is_last: bool,
     ) -> "Frame":
-        """Create a CHUNK frame with offset info (for large binary transfers)"""
-        frame = cls.new(FrameType.CHUNK, id)
+        """Create a CHUNK frame with offset info (Protocol v2: stream_id required)"""
+        frame = cls.new(FrameType.CHUNK, req_id)
+        frame.stream_id = stream_id
         frame.seq = seq
         frame.payload = payload
         frame.offset = offset

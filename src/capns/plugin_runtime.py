@@ -209,11 +209,22 @@ class PendingPeerRequest:
 
 
 @dataclass
+class PendingStream:
+    """A single stream within a multiplexed request."""
+    media_urn: str
+    chunks: List[bytes]
+    complete: bool
+
+
+@dataclass
 class PendingIncomingRequest:
-    """Internal struct to track incoming requests that are being chunked."""
+    """Internal struct to track incoming multiplexed request streams.
+    Protocol v2: Requests arrive as REQ (empty) → STREAM_START → CHUNK(s) → STREAM_END → END.
+    """
     cap_urn: str
     content_type: Optional[str]
-    chunks: List[bytes]
+    streams: List  # List of (stream_id, PendingStream) tuples — ordered
+    ended: bool  # True after END frame — any stream activity after is FATAL
 
 
 class PeerInvokerImpl:
@@ -360,28 +371,76 @@ class CliStreamEmitter:
 
 
 class ThreadSafeEmitter:
-    """Thread-safe implementation of StreamEmitter that writes CBOR frames.
-    Uses threading.Lock for safe concurrent access from multiple handler threads.
+    """Thread-safe implementation of StreamEmitter using Protocol v2 stream multiplexing.
+
+    Automatically sends STREAM_START before the first emission, then CHUNK frames
+    with stream_id. Caller MUST call finalize() after handler returns to send
+    STREAM_END + END.
+
     All methods raise exceptions on error - no silent failures.
     """
 
-    def __init__(self, writer: FrameWriter, request_id: MessageId, writer_lock: Optional[threading.Lock] = None, max_chunk: Optional[int] = None):
+    def __init__(self, writer: FrameWriter, request_id: MessageId, stream_id: str, media_urn: str, writer_lock: Optional[threading.Lock] = None, max_chunk: Optional[int] = None):
         self.writer = writer
         self.request_id = request_id
+        self.stream_id = stream_id
+        self.media_urn = media_urn
         self.seq = 0
         self.seq_lock = threading.Lock()
         self.writer_lock = writer_lock if writer_lock is not None else threading.Lock()
         self.max_chunk = max_chunk if max_chunk is not None else DEFAULT_MAX_CHUNK
+        self.stream_started = False
+        self.stream_lock = threading.Lock()
+
+    def _ensure_stream_started(self) -> None:
+        """Send STREAM_START if not yet sent. Must be called with seq_lock held."""
+        with self.stream_lock:
+            if not self.stream_started:
+                self.stream_started = True
+                start_frame = Frame.stream_start(self.request_id, self.stream_id, self.media_urn)
+                with self.writer_lock:
+                    self.writer.write(start_frame)
 
     def emit_bytes(self, payload: bytes) -> None:
-        with self.seq_lock:
-            seq = self.seq
-            self.seq += 1
+        self._ensure_stream_started()
 
-        frame = Frame.chunk(self.request_id, seq, payload)
+        # Auto-chunk large payloads
+        offset = 0
+        while offset < len(payload):
+            chunk_size = min(self.max_chunk, len(payload) - offset)
+            chunk_data = payload[offset:offset + chunk_size]
+            offset += chunk_size
 
+            with self.seq_lock:
+                seq = self.seq
+                self.seq += 1
+
+            frame = Frame.chunk(self.request_id, self.stream_id, seq, chunk_data)
+            with self.writer_lock:
+                self.writer.write(frame)
+
+    def finalize(self) -> None:
+        """Send STREAM_END + END to complete the response.
+        Must be called exactly once after the handler returns.
+        If handler never emitted, sends STREAM_START first for protocol consistency.
+        """
+        # Ensure STREAM_START was sent (even if handler emitted nothing)
+        with self.stream_lock:
+            if not self.stream_started:
+                self.stream_started = True
+                start_frame = Frame.stream_start(self.request_id, self.stream_id, self.media_urn)
+                with self.writer_lock:
+                    self.writer.write(start_frame)
+
+        # STREAM_END
+        stream_end = Frame.stream_end(self.request_id, self.stream_id)
         with self.writer_lock:
-            self.writer.write(frame)
+            self.writer.write(stream_end)
+
+        # END
+        end_frame = Frame.end(self.request_id, None)
+        with self.writer_lock:
+            self.writer.write(end_frame)
 
     def log(self, level: str, message: str) -> None:
         frame = Frame.log(self.request_id, level, message)
@@ -389,17 +448,13 @@ class ThreadSafeEmitter:
             self.writer.write(frame)
 
     def emit_status(self, operation: str, details: str) -> None:
-        """Override emit_status to send LOG frames, not CHUNK frames.
-        Status messages are progress/status updates, not response data.
-        Uses LOG frames (side-channel), best-effort - swallows exceptions to not disrupt handler.
-        """
+        """Send status as LOG frame (side-channel, best-effort)."""
         try:
             message = f"{operation}: {details}"
             frame = Frame.log(self.request_id, "status", message)
             with self.writer_lock:
                 self.writer.write(frame)
         except Exception:
-            # Best-effort status - don't fail handler if status write fails
             pass
 
 
@@ -767,24 +822,12 @@ class PluginRuntime:
 
                 raw_payload = frame.payload if frame.payload is not None else b""
 
-                # Check if this is a chunked request (empty payload means chunks will follow)
-                if len(raw_payload) == 0:
-                    # Start accumulating chunks for this request
-                    with pending_incoming_lock:
-                        pending_incoming[frame.id.to_string()] = PendingIncomingRequest(
-                            cap_urn=cap_urn,
-                            content_type=frame.content_type,
-                            chunks=[]
-                        )
-                    continue  # Wait for CHUNK/END frames
-
-                # Complete payload in REQ frame - invoke handler immediately
-                handler = self.find_handler(cap_urn)
-                if handler is None:
+                # Protocol v2: REQ must have empty payload — arguments come as streams
+                if len(raw_payload) > 0:
                     err_frame = Frame.err(
                         frame.id,
-                        "NO_HANDLER",
-                        f"No handler registered for cap: {cap_urn}"
+                        "PROTOCOL_ERROR",
+                        "REQ frame must have empty payload — use STREAM_START for arguments"
                     )
                     with writer_lock:
                         try:
@@ -793,82 +836,15 @@ class PluginRuntime:
                             pass
                     continue
 
-                # Clone what we need for the handler thread
-                request_id = frame.id
-                content_type = frame.content_type
-                cap_urn_clone = cap_urn
-                max_chunk = self.limits.max_chunk
-
-                # Spawn handler in separate thread - main loop continues immediately
-                def handler_thread():
-                    emitter = ThreadSafeEmitter(writer, request_id, writer_lock, max_chunk)
-                    # Note: writer is shared via emitter, emitter handles locking via writer_lock
-
-                    # Create peer invoker for bidirectional communication
-                    peer_invoker = PeerInvokerImpl(writer, writer_lock, pending_peer_requests, max_chunk)
-
-                    # Extract effective payload from arguments if content_type is CBOR
-                    try:
-                        payload = extract_effective_payload(
-                            raw_payload,
-                            content_type,
-                            cap_urn_clone
-                        )
-                    except Exception as e:
-                        # Failed to extract payload - send error response
-                        err_frame = Frame.err(request_id, "PAYLOAD_ERROR", str(e))
-                        with writer_lock:
-                            try:
-                                writer.write(err_frame)
-                            except Exception as write_err:
-                                print(f"[PluginRuntime] Failed to write error response: {write_err}", file=sys.stderr)
-                        return
-
-                    # Execute handler and send response with automatic chunking
-                    try:
-                        result = handler(payload, emitter, peer_invoker)
-
-                        # Automatic chunking: split large payloads into CHUNK frames
-                        with writer_lock:
-                            try:
-                                if len(result) <= max_chunk:
-                                    # Small payload: send single END frame
-                                    end_frame = Frame.end(request_id, result)
-                                    writer.write(end_frame)
-                                else:
-                                    # Large payload: send CHUNK frames + final END
-                                    offset = 0
-                                    seq = 0
-
-                                    while offset < len(result):
-                                        remaining = len(result) - offset
-                                        chunk_size = min(remaining, max_chunk)
-                                        chunk_data = result[offset:offset + chunk_size]
-                                        offset += chunk_size
-
-                                        if offset < len(result):
-                                            # Not the last chunk - send CHUNK frame
-                                            chunk_frame = Frame.chunk(request_id, seq, chunk_data)
-                                            writer.write(chunk_frame)
-                                            seq += 1
-                                        else:
-                                            # Last chunk - send END frame with remaining data
-                                            end_frame = Frame.end(request_id, chunk_data)
-                                            writer.write(end_frame)
-                            except Exception as e:
-                                print(f"[PluginRuntime] Failed to write response: {e}", file=sys.stderr)
-                    except Exception as e:
-                        # Handler error
-                        err_frame = Frame.err(request_id, "HANDLER_ERROR", str(e))
-                        with writer_lock:
-                            try:
-                                writer.write(err_frame)
-                            except Exception as write_err:
-                                print(f"[PluginRuntime] Failed to write error response: {write_err}", file=sys.stderr)
-
-                thread = threading.Thread(target=handler_thread, daemon=True)
-                thread.start()
-                active_handlers.append(thread)
+                # Start tracking this request — streams will be added via STREAM_START
+                with pending_incoming_lock:
+                    pending_incoming[frame.id.to_string()] = PendingIncomingRequest(
+                        cap_urn=cap_urn,
+                        content_type=frame.content_type,
+                        streams=[],
+                        ended=False
+                    )
+                continue  # Wait for STREAM_START/CHUNK/STREAM_END/END frames
 
             elif frame.frame_type == FrameType.HEARTBEAT:
                 # Respond to heartbeat immediately - never blocked by handlers
@@ -890,15 +866,69 @@ class PluginRuntime:
                         pass
 
             elif frame.frame_type == FrameType.CHUNK:
+                # Protocol v2: CHUNK must have stream_id
+                if frame.stream_id is None:
+                    err_frame = Frame.err(frame.id, "PROTOCOL_ERROR", "CHUNK frame missing stream_id")
+                    with writer_lock:
+                        try:
+                            writer.write(err_frame)
+                        except Exception:
+                            pass
+                    continue
+
+                stream_id = frame.stream_id
+
                 # Check if this is a chunk for an incoming request
                 with pending_incoming_lock:
-                    if frame.id.to_string() in pending_incoming:
-                        pending_req = pending_incoming[frame.id.to_string()]
-                        if frame.payload:
-                            pending_req.chunks.append(frame.payload)
-                        continue  # Wait for more chunks or END
+                    frame_id_str = frame.id.to_string()
+                    if frame_id_str in pending_incoming:
+                        pending_req = pending_incoming[frame_id_str]
 
-                # Not an incoming request chunk - must be a response chunk
+                        # FAIL HARD: Request already ended
+                        if pending_req.ended:
+                            del pending_incoming[frame_id_str]
+                            err_frame = Frame.err(frame.id, "PROTOCOL_ERROR", "CHUNK after request END")
+                            with writer_lock:
+                                try:
+                                    writer.write(err_frame)
+                                except Exception:
+                                    pass
+                            continue
+
+                        # FAIL HARD: Unknown stream
+                        found_stream = None
+                        for sid, stream in pending_req.streams:
+                            if sid == stream_id:
+                                found_stream = stream
+                                break
+
+                        if found_stream is None:
+                            del pending_incoming[frame_id_str]
+                            err_frame = Frame.err(frame.id, "PROTOCOL_ERROR", f"CHUNK for unknown stream_id: {stream_id}")
+                            with writer_lock:
+                                try:
+                                    writer.write(err_frame)
+                                except Exception:
+                                    pass
+                            continue
+
+                        # FAIL HARD: Stream already ended
+                        if found_stream.complete:
+                            del pending_incoming[frame_id_str]
+                            err_frame = Frame.err(frame.id, "PROTOCOL_ERROR", f"CHUNK for ended stream: {stream_id}")
+                            with writer_lock:
+                                try:
+                                    writer.write(err_frame)
+                                except Exception:
+                                    pass
+                            continue
+
+                        # Valid chunk for active stream
+                        if frame.payload:
+                            found_stream.chunks.append(frame.payload)
+                        continue  # Wait for more chunks or STREAM_END
+
+                # Not an incoming request chunk - must be a peer response chunk
                 frame_id_str = frame.id.to_string()
                 with pending_lock:
                     if frame_id_str in pending_peer_requests:
@@ -907,17 +937,27 @@ class PluginRuntime:
                         pending_req.queue.put(("ok", payload))
 
             elif frame.frame_type == FrameType.END:
-                # Check if this is the end of an incoming chunked request
+                # Protocol v2: END marks the end of all streams for this request
                 pending_req = None
                 with pending_incoming_lock:
-                    if frame.id.to_string() in pending_incoming:
-                        pending_req = pending_incoming.pop(frame.id.to_string())
+                    frame_id_str = frame.id.to_string()
+                    if frame_id_str in pending_incoming:
+                        pending_req = pending_incoming.pop(frame_id_str)
+                        if pending_req:
+                            pending_req.ended = True
 
                 if pending_req:
-                    # Concatenate all chunks into final payload
+                    # Concatenate all complete streams into final payload (in order)
+                    all_chunks = []
+                    for _sid, stream in pending_req.streams:
+                        if stream.complete:
+                            all_chunks.extend(stream.chunks)
+
+                    # Add END frame payload if present
                     if frame.payload:
-                        pending_req.chunks.append(frame.payload)
-                    raw_payload = b''.join(pending_req.chunks)
+                        all_chunks.append(frame.payload)
+
+                    raw_payload = b''.join(all_chunks)
 
                     # Find handler
                     handler = self.find_handler(pending_req.cap_urn)
@@ -936,9 +976,11 @@ class PluginRuntime:
                     cap_urn_clone = pending_req.cap_urn
                     max_chunk = self.limits.max_chunk
 
-                    # Spawn thread to invoke handler (same pattern as REQ handling)
-                    def handle_chunked_request():
-                        emitter = ThreadSafeEmitter(writer, request_id, writer_lock, max_chunk)
+                    # Spawn thread to invoke handler with stream multiplexing response
+                    def handle_streamed_request():
+                        import uuid as _uuid
+                        response_stream_id = f"resp-{_uuid.uuid4().hex[:8]}"
+                        emitter = ThreadSafeEmitter(writer, request_id, response_stream_id, "media:bytes", writer_lock, max_chunk)
                         peer_invoker = PeerInvokerImpl(writer, writer_lock, pending_peer_requests, max_chunk)
 
                         # Extract effective payload from arguments if content_type is CBOR
@@ -949,7 +991,6 @@ class PluginRuntime:
                                 cap_urn_clone
                             )
                         except Exception as e:
-                            # Failed to extract payload - send error response
                             err_frame = Frame.err(request_id, "PAYLOAD_ERROR", str(e))
                             with writer_lock:
                                 try:
@@ -958,41 +999,18 @@ class PluginRuntime:
                                     print(f"[PluginRuntime] Failed to write error response: {write_err}", file=sys.stderr)
                             return
 
-                        # Execute handler and send response with automatic chunking
+                        # Execute handler — response emitted via emitter, finalized at end
                         try:
                             result = handler(payload, emitter, peer_invoker)
 
-                            # Automatic chunking: split large payloads into CHUNK frames
-                            with writer_lock:
-                                try:
-                                    if len(result) <= max_chunk:
-                                        # Small payload: send single END frame
-                                        end_frame = Frame.end(request_id, result)
-                                        writer.write(end_frame)
-                                    else:
-                                        # Large payload: send CHUNK frames + final END
-                                        offset = 0
-                                        seq = 0
+                            # Emit handler's return value through the emitter
+                            if result:
+                                emitter.emit_bytes(result)
 
-                                        while offset < len(result):
-                                            remaining = len(result) - offset
-                                            chunk_size = min(remaining, max_chunk)
-                                            chunk_data = result[offset:offset + chunk_size]
-                                            offset += chunk_size
+                            # Finalize: STREAM_END + END
+                            emitter.finalize()
 
-                                            if offset < len(result):
-                                                # Not the last chunk - send CHUNK frame
-                                                chunk_frame = Frame.chunk(request_id, seq, chunk_data)
-                                                writer.write(chunk_frame)
-                                                seq += 1
-                                            else:
-                                                # Last chunk - send END frame with remaining data
-                                                end_frame = Frame.end(request_id, chunk_data)
-                                                writer.write(end_frame)
-                                except Exception as e:
-                                    print(f"[PluginRuntime] Failed to write response: {e}", file=sys.stderr)
                         except Exception as e:
-                            # Handler error
                             err_frame = Frame.err(request_id, "HANDLER_ERROR", str(e))
                             with writer_lock:
                                 try:
@@ -1000,12 +1018,12 @@ class PluginRuntime:
                                 except Exception as write_err:
                                     print(f"[PluginRuntime] Failed to write error response: {write_err}", file=sys.stderr)
 
-                    thread = threading.Thread(target=handle_chunked_request, daemon=True)
+                    thread = threading.Thread(target=handle_streamed_request, daemon=True)
                     thread.start()
                     active_handlers.append(thread)
                     continue
 
-                # Not an incoming request end - must be a response end
+                # Not an incoming request end - must be a peer response end
                 frame_id_str = frame.id.to_string()
                 with pending_lock:
                     if frame_id_str in pending_peer_requests:
@@ -1014,16 +1032,102 @@ class PluginRuntime:
                         pending_req.queue.put(("end", payload))
                         del pending_peer_requests[frame_id_str]
 
-            elif frame.frame_type == FrameType.RES:
-                # Response frame from host - route to pending peer request
-                frame_id_str = frame.id.to_string()
-                with pending_lock:
-                    if frame_id_str in pending_peer_requests:
-                        pending_req = pending_peer_requests[frame_id_str]
-                        payload = frame.payload if frame.payload is not None else b""
-                        pending_req.queue.put(("ok", payload))
-                        pending_req.queue.put(("end", b""))
-                        del pending_peer_requests[frame_id_str]
+            elif frame.frame_type == FrameType.STREAM_START:
+                # Protocol v2: A new stream is starting for a request
+                if frame.stream_id is None:
+                    err_frame = Frame.err(frame.id, "PROTOCOL_ERROR", "STREAM_START missing stream_id")
+                    with writer_lock:
+                        try:
+                            writer.write(err_frame)
+                        except Exception:
+                            pass
+                    continue
+
+                if frame.media_urn is None:
+                    err_frame = Frame.err(frame.id, "PROTOCOL_ERROR", "STREAM_START missing media_urn")
+                    with writer_lock:
+                        try:
+                            writer.write(err_frame)
+                        except Exception:
+                            pass
+                    continue
+
+                stream_id = frame.stream_id
+                media_urn = frame.media_urn
+
+                with pending_incoming_lock:
+                    frame_id_str = frame.id.to_string()
+                    if frame_id_str in pending_incoming:
+                        pending_req = pending_incoming[frame_id_str]
+
+                        # FAIL HARD: Request already ended
+                        if pending_req.ended:
+                            del pending_incoming[frame_id_str]
+                            err_frame = Frame.err(frame.id, "PROTOCOL_ERROR", "STREAM_START after request END")
+                            with writer_lock:
+                                try:
+                                    writer.write(err_frame)
+                                except Exception:
+                                    pass
+                            continue
+
+                        # FAIL HARD: Duplicate stream_id
+                        for sid, _ in pending_req.streams:
+                            if sid == stream_id:
+                                del pending_incoming[frame_id_str]
+                                err_frame = Frame.err(frame.id, "PROTOCOL_ERROR", f"Duplicate stream_id: {stream_id}")
+                                with writer_lock:
+                                    try:
+                                        writer.write(err_frame)
+                                    except Exception:
+                                        pass
+                                break
+                        else:
+                            # No duplicate — add new stream
+                            pending_req.streams.append((stream_id, PendingStream(
+                                media_urn=media_urn,
+                                chunks=[],
+                                complete=False
+                            )))
+                    else:
+                        print(f"[PluginRuntime] STREAM_START for unknown request_id: {frame.id}", file=sys.stderr)
+
+            elif frame.frame_type == FrameType.STREAM_END:
+                # Protocol v2: A stream has ended for a request
+                if frame.stream_id is None:
+                    err_frame = Frame.err(frame.id, "PROTOCOL_ERROR", "STREAM_END missing stream_id")
+                    with writer_lock:
+                        try:
+                            writer.write(err_frame)
+                        except Exception:
+                            pass
+                    continue
+
+                stream_id = frame.stream_id
+
+                with pending_incoming_lock:
+                    frame_id_str = frame.id.to_string()
+                    if frame_id_str in pending_incoming:
+                        pending_req = pending_incoming[frame_id_str]
+
+                        # Find and mark stream as complete
+                        found = False
+                        for sid, stream in pending_req.streams:
+                            if sid == stream_id:
+                                stream.complete = True
+                                found = True
+                                break
+
+                        if not found:
+                            del pending_incoming[frame_id_str]
+                            err_frame = Frame.err(frame.id, "PROTOCOL_ERROR", f"STREAM_END for unknown stream_id: {stream_id}")
+                            with writer_lock:
+                                try:
+                                    writer.write(err_frame)
+                                except Exception:
+                                    pass
+                    else:
+                        print(f"[PluginRuntime] STREAM_END for unknown request_id: {frame.id}", file=sys.stderr)
 
             elif frame.frame_type == FrameType.ERR:
                 # Error frame from host - could be response to peer request

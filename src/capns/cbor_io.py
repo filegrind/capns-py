@@ -404,14 +404,15 @@ class FrameWriter:
         """
         write_frame(self.writer, frame, self.limits)
 
-    def write_response_with_chunking(self, request_id: MessageId, payload: bytes) -> None:
-        """Write a response with automatic chunking for large payloads.
+    def write_stream_chunked(self, request_id: MessageId, stream_id: str, media_urn: str, payload: bytes) -> None:
+        """Write a response using Protocol v2 stream multiplexing.
 
-        Payloads <= max_chunk produce a single END frame.
-        Payloads > max_chunk produce CHUNK frames + final END frame.
+        Sends: STREAM_START → CHUNK(s) → STREAM_END → END
 
         Args:
             request_id: The request message ID
+            stream_id: Unique stream identifier
+            media_urn: Media URN for the stream content type
             payload: The full response payload
 
         Raises:
@@ -419,25 +420,25 @@ class FrameWriter:
         """
         max_chunk = self.limits.max_chunk
 
-        if len(payload) <= max_chunk:
-            frame = Frame.end(request_id, payload)
-            self.write(frame)
-            return
+        # STREAM_START
+        self.write(Frame.stream_start(request_id, stream_id, media_urn))
 
+        # CHUNK(s)
         offset = 0
         seq = 0
         while offset < len(payload):
             chunk_size = min(len(payload) - offset, max_chunk)
             chunk_data = payload[offset:offset + chunk_size]
             offset += chunk_size
+            frame = Frame.chunk(request_id, stream_id, seq, chunk_data)
+            self.write(frame)
+            seq += 1
 
-            if offset < len(payload):
-                frame = Frame.chunk(request_id, seq, chunk_data)
-                self.write(frame)
-                seq += 1
-            else:
-                frame = Frame.end(request_id, chunk_data)
-                self.write(frame)
+        # STREAM_END
+        self.write(Frame.stream_end(request_id, stream_id))
+
+        # END
+        self.write(Frame.end(request_id, None))
 
     def get_limits(self) -> Limits:
         """Get the current limits"""

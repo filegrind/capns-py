@@ -22,12 +22,14 @@ def test_frame_type_roundtrip():
     for t in [
         FrameType.HELLO,
         FrameType.REQ,
-        FrameType.RES,
+        # RES (2) removed in Protocol v2
         FrameType.CHUNK,
         FrameType.END,
         FrameType.LOG,
         FrameType.ERR,
         FrameType.HEARTBEAT,
+        FrameType.STREAM_START,
+        FrameType.STREAM_END,
     ]:
         v = int(t)
         recovered = FrameType.from_u8(v)
@@ -48,7 +50,7 @@ def test_frame_type_discriminant_values():
     """Test frame type values match protocol specification"""
     assert FrameType.HELLO == 0
     assert FrameType.REQ == 1
-    assert FrameType.RES == 2
+    # RES (2) removed in Protocol v2
     assert FrameType.CHUNK == 3
     assert FrameType.END == 4
     assert FrameType.LOG == 5
@@ -152,24 +154,17 @@ def test_req_frame():
     assert frame.version == PROTOCOL_VERSION
 
 
-# TEST183: Test Frame::res stores payload and content_type for single complete response
-def test_res_frame():
-    """Test RES frame creation"""
-    id = MessageId.new_uuid()
-    frame = Frame.res(id, b"result", "text/plain")
-    assert frame.frame_type == FrameType.RES
-    assert frame.id == id
-    assert frame.payload == b"result"
-    assert frame.content_type == "text/plain"
+# TEST183: RES frame removed in Protocol v2 — replaced by STREAM_START/CHUNK/STREAM_END/END
 
 
-# TEST184: Test Frame::chunk stores seq and payload for streaming
+# TEST184: Test Frame::chunk stores stream_id, seq and payload for streaming
 def test_chunk_frame():
-    """Test CHUNK frame creation"""
+    """Test CHUNK frame creation with stream_id (Protocol v2)"""
     id = MessageId.new_uuid()
-    frame = Frame.chunk(id, 3, b"data")
+    frame = Frame.chunk(id, "stream-1", 3, b"data")
     assert frame.frame_type == FrameType.CHUNK
     assert frame.id == id
+    assert frame.stream_id == "stream-1"
     assert frame.seq == 3
     assert frame.payload == b"data"
     assert not frame.is_eof(), "plain chunk should not be EOF"
@@ -221,20 +216,21 @@ def test_chunk_with_offset():
     """Test CHUNK frame with offset information"""
     id = MessageId.new_uuid()
 
-    # First chunk carries total len
-    first = Frame.chunk_with_offset(id, 0, b"data", 0, 1000, False)
+    # First chunk carries total len (Protocol v2: stream_id required)
+    first = Frame.chunk_with_offset(id, "stream-1", 0, b"data", 0, 1000, False)
     assert first.seq == 0
     assert first.offset == 0
+    assert first.stream_id == "stream-1"
     assert first.len == 1000, "first chunk must carry total len"
     assert not first.is_eof()
 
     # Middle chunk doesn't carry len
-    mid = Frame.chunk_with_offset(id, 3, b"mid", 500, 9999, False)
+    mid = Frame.chunk_with_offset(id, "stream-1", 3, b"mid", 500, 9999, False)
     assert mid.len is None, "non-first chunk must not carry len, seq != 0"
     assert mid.offset == 500
 
     # Last chunk sets EOF
-    last = Frame.chunk_with_offset(id, 5, b"last", 900, None, True)
+    last = Frame.chunk_with_offset(id, "stream-1", 5, b"last", 900, None, True)
     assert last.is_eof()
     assert last.len is None
 

@@ -140,8 +140,8 @@ def test_read_frame_fails_on_incomplete_frame_data():
 def test_write_frame_enforces_max_frame_size():
     output = io.BytesIO()
 
-    # Create a frame with large payload
-    frame = Frame.res(MessageId.new_uuid(), b"x" * 2000, "application/octet-stream")
+    # Create a frame with large payload (use CHUNK frame since RES removed in Protocol v2)
+    frame = Frame.chunk(MessageId.new_uuid(), "test-stream", 0, b"x" * 2000)
     limits = Limits(1024, 512)  # Max frame 1KB
 
     with pytest.raises(FrameTooLargeError):
@@ -419,8 +419,8 @@ def test_handshake_fails_if_plugin_missing_manifest():
 def test_read_frame_enforces_limit():
     output = io.BytesIO()
 
-    # Write a large frame
-    frame = Frame.res(MessageId.new_uuid(), b"x" * 2000, "application/octet-stream")
+    # Write a large frame (use CHUNK frame since RES removed in Protocol v2)
+    frame = Frame.chunk(MessageId.new_uuid(), "test-stream", 0, b"x" * 2000)
     large_limits = Limits(10000, 5000)
     write_frame(output, frame, large_limits)
 
@@ -435,7 +435,7 @@ def test_read_frame_enforces_limit():
 # TEST229: Test frame with zero-length payload
 def test_frame_with_zero_length_payload():
     output = io.BytesIO()
-    frame = Frame.res(MessageId.new_uuid(), b"", "text/plain")
+    frame = Frame.chunk(MessageId.new_uuid(), "test-stream", 0, b"")
     limits = Limits.default()
 
     write_frame(output, frame, limits)
@@ -512,7 +512,7 @@ def test_frame_encoding_preserves_binary_data():
     # Binary data with all byte values
     binary_data = bytes(range(256))
 
-    frame = Frame.res(MessageId.new_uuid(), binary_data, "application/octet-stream")
+    frame = Frame.chunk(MessageId.new_uuid(), "test-stream", 0, binary_data)
 
     data = encode_frame(frame)
     decoded = decode_frame(data)
@@ -541,16 +541,16 @@ def test_handshake_with_very_small_limits():
     assert received.hello_max_frame() == 256
 
 
-# TEST313: Test write_response_with_chunking splits payload larger than max_chunk into
+# TEST313: Test write_stream_chunked sends STREAM_START + CHUNK(s) + STREAM_END + END for payload larger than max_chunk,
 # CHUNK frames + END frame, and reading them back reassembles the full original data
-def test_write_response_with_chunking_reassembly():
+def test_write_stream_chunked_reassembly():
     buf = io.BytesIO()
     writer = FrameWriter(buf, Limits(DEFAULT_MAX_FRAME, 100))
 
     request_id = MessageId.new_uuid()
     data = bytes(i % 256 for i in range(250))
 
-    writer.write_response_with_chunking(request_id, data)
+    writer.write_stream_chunked(request_id, "resp-1", "media:bytes", data)
 
     buf.seek(0)
     reader = FrameReader(buf)
@@ -564,62 +564,90 @@ def test_write_response_with_chunking_reassembly():
         if frame.frame_type == FrameType.END:
             break
 
-    # 250 bytes / 100 max_chunk = 2 CHUNK + 1 END
-    assert len(frames) == 3, f"Expected 3 frames, got {len(frames)}"
-    assert frames[0].frame_type == FrameType.CHUNK
+    # Protocol v2: STREAM_START + 3 CHUNK (250/100=3) + STREAM_END + END = 6 frames
+    assert len(frames) == 6, f"Expected 6 frames (STREAM_START + 3 CHUNK + STREAM_END + END), got {len(frames)}"
+    assert frames[0].frame_type == FrameType.STREAM_START
+    assert frames[0].stream_id == "resp-1"
+    assert frames[0].media_urn == "media:bytes"
     assert frames[1].frame_type == FrameType.CHUNK
-    assert frames[2].frame_type == FrameType.END
+    assert frames[1].stream_id == "resp-1"
+    assert frames[2].frame_type == FrameType.CHUNK
+    assert frames[3].frame_type == FrameType.CHUNK
+    assert frames[4].frame_type == FrameType.STREAM_END
+    assert frames[4].stream_id == "resp-1"
+    assert frames[5].frame_type == FrameType.END
 
     reassembled = b""
     for f in frames:
-        reassembled += f.payload or b""
+        if f.frame_type == FrameType.CHUNK:
+            reassembled += f.payload or b""
     assert reassembled == data, "concatenated chunks must match original data"
 
 
-# TEST314: Test payload exactly equal to max_chunk produces single END frame (no CHUNK frames)
-def test_exact_max_chunk_single_end():
+# TEST314: Test payload exactly equal to max_chunk produces STREAM_START + 1 CHUNK + STREAM_END + END
+def test_exact_max_chunk_stream_chunked():
     buf = io.BytesIO()
     writer = FrameWriter(buf, Limits(DEFAULT_MAX_FRAME, 100))
 
     request_id = MessageId.new_uuid()
     data = bytes([0xAB] * 100)
 
-    writer.write_response_with_chunking(request_id, data)
+    writer.write_stream_chunked(request_id, "resp-1", "media:bytes", data)
 
     buf.seek(0)
     reader = FrameReader(buf)
-    frame = reader.read()
 
-    assert frame is not None
-    assert frame.frame_type == FrameType.END, "exact max_chunk must produce single END"
-    assert frame.payload == data
-    assert len(frame.payload) == 100
+    frames = []
+    while True:
+        frame = reader.read()
+        if frame is None:
+            break
+        frames.append(frame)
+        if frame.frame_type == FrameType.END:
+            break
+
+    # STREAM_START + 1 CHUNK + STREAM_END + END = 4 frames
+    assert len(frames) == 4, f"Expected 4 frames, got {len(frames)}"
+    assert frames[0].frame_type == FrameType.STREAM_START
+    assert frames[1].frame_type == FrameType.CHUNK
+    assert frames[1].payload == data
+    assert frames[2].frame_type == FrameType.STREAM_END
+    assert frames[3].frame_type == FrameType.END
 
 
-# TEST315: Test payload of max_chunk + 1 produces exactly one CHUNK frame + one END frame
-def test_max_chunk_plus_one_splits_into_two():
+# TEST315: Test payload of max_chunk + 1 produces STREAM_START + 2 CHUNK + STREAM_END + END
+def test_max_chunk_plus_one_splits_into_two_chunks():
     buf = io.BytesIO()
     writer = FrameWriter(buf, Limits(DEFAULT_MAX_FRAME, 100))
 
     request_id = MessageId.new_uuid()
     data = bytes(range(101))
 
-    writer.write_response_with_chunking(request_id, data)
+    writer.write_stream_chunked(request_id, "resp-1", "media:bytes", data)
 
     buf.seek(0)
     reader = FrameReader(buf)
 
-    chunk = reader.read()
-    assert chunk is not None
-    assert chunk.frame_type == FrameType.CHUNK
-    assert len(chunk.payload) == 100
+    frames = []
+    while True:
+        frame = reader.read()
+        if frame is None:
+            break
+        frames.append(frame)
+        if frame.frame_type == FrameType.END:
+            break
 
-    end = reader.read()
-    assert end is not None
-    assert end.frame_type == FrameType.END
-    assert len(end.payload) == 1
+    # STREAM_START + 2 CHUNK + STREAM_END + END = 5 frames
+    assert len(frames) == 5, f"Expected 5 frames, got {len(frames)}"
+    assert frames[0].frame_type == FrameType.STREAM_START
+    assert frames[1].frame_type == FrameType.CHUNK
+    assert len(frames[1].payload) == 100
+    assert frames[2].frame_type == FrameType.CHUNK
+    assert len(frames[2].payload) == 1
+    assert frames[3].frame_type == FrameType.STREAM_END
+    assert frames[4].frame_type == FrameType.END
 
-    reassembled = chunk.payload + end.payload
+    reassembled = frames[1].payload + frames[2].payload
     assert reassembled == data
 
 
@@ -632,7 +660,7 @@ def test_chunking_data_integrity_3x():
     pattern = b"ABCDEFGHIJ"
     data = (pattern * 30)  # 300 bytes
 
-    writer.write_response_with_chunking(request_id, data)
+    writer.write_stream_chunked(request_id, "resp-1", "media:bytes", data)
 
     buf.seek(0)
     reader = FrameReader(buf)
@@ -646,11 +674,13 @@ def test_chunking_data_integrity_3x():
         if frame.frame_type == FrameType.END:
             break
 
-    assert len(frames) == 3, "300/100 = 2 CHUNK + 1 END"
+    # Protocol v2: STREAM_START + 3 CHUNK (300/100) + STREAM_END + END = 6 frames
+    assert len(frames) == 6, f"Expected 6 frames, got {len(frames)}"
 
     reassembled = b""
     for f in frames:
-        reassembled += f.payload or b""
+        if f.frame_type == FrameType.CHUNK:
+            reassembled += f.payload or b""
     assert len(reassembled) == 300
     assert reassembled == data, "pattern must be preserved across chunk boundaries"
 
