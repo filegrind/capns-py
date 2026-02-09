@@ -28,7 +28,9 @@ async def main():
     host = await AsyncPluginHost.new(process.stdout, process.stdin)
 
     # Send request and receive response
-    response = await host.call("cap:op=test", b"payload", "application/json")
+    from capns.caller import CapArgumentValue
+    args = [CapArgumentValue("media:bytes", b"payload")]
+    response = await host.call_with_arguments("cap:op=test", args)
 ```
 """
 
@@ -669,18 +671,19 @@ class AsyncPluginHost:
                     await req_state.queue.put(error)
                 break
 
-    async def request(
+    async def request_with_arguments(
         self,
         cap_urn: str,
-        payload: bytes,
-        content_type: str,
+        arguments: list,
     ) -> asyncio.Queue:
-        """Send a cap request and receive responses via a queue
+        """Send a cap request with typed arguments and receive responses via a queue.
+
+        Each argument becomes an independent stream (STREAM_START + CHUNK(s) + STREAM_END).
+        This matches the Rust AsyncPluginHost.request_with_arguments() wire format exactly.
 
         Args:
             cap_urn: Cap URN to invoke
-            payload: Request payload
-            content_type: Content type of payload
+            arguments: List of CapArgumentValue (media_urn + value bytes)
 
         Returns:
             Queue for receiving response chunks
@@ -692,9 +695,10 @@ class AsyncPluginHost:
         if self._state.closed:
             raise Closed()
 
+        import uuid as _uuid
+
         request_id = MessageId.new_uuid()
 
-        # Create queue for responses with Protocol v2 stream tracking
         queue = asyncio.Queue(maxsize=32)
         self._state.pending[request_id] = RequestState(
             queue=queue,
@@ -704,79 +708,64 @@ class AsyncPluginHost:
 
         max_chunk = self.limits.max_chunk
 
-        # Protocol v2: Use stream multiplexing for all requests
-        # Pattern: REQ (empty) + STREAM_START + CHUNK + STREAM_END + END
-        import uuid
-        stream_id = str(uuid.uuid4())
-
-        # Protocol v2: ALL requests use stream multiplexing (no backward compatibility)
-        # REQ (empty) + STREAM_START + CHUNK frames (if non-empty) + STREAM_END + END
-        #print(f"[AsyncPluginHost] request: payload ({len(payload)} bytes), using Protocol v2 streams with max_chunk={max_chunk}")
-
-        # Send initial REQ frame with cap_urn and content_type, but empty payload
-        request = Frame.req(request_id, cap_urn, b"", content_type)
+        # REQ with empty payload — arguments come as streams
+        request = Frame.req(request_id, cap_urn, b"", "application/cbor")
         try:
             await self._writer_queue.put(WriteFrame(request))
         except:
             raise SendError()
 
-        # Send STREAM_START
-        stream_start = Frame.stream_start(request_id, stream_id, "media:bytes")
-        try:
-            await self._writer_queue.put(WriteFrame(stream_start))
-        except:
-            raise SendError()
+        # Each argument becomes an independent stream
+        for arg in arguments:
+            stream_id = str(_uuid.uuid4())
 
-        # Send payload in CHUNK frames with stream_id
-        offset = 0
-        seq = 0
+            # STREAM_START with the argument's media_urn
+            stream_start = Frame.stream_start(request_id, stream_id, arg.media_urn)
+            try:
+                await self._writer_queue.put(WriteFrame(stream_start))
+            except:
+                raise SendError()
 
-        if len(payload) > 0:
-            # Non-empty payload: send CHUNK frames
-            while offset < len(payload):
-                remaining = len(payload) - offset
-                chunk_size = min(remaining, max_chunk)
-                chunk_data = payload[offset:offset + chunk_size]
-                offset += chunk_size
-
-                # Send CHUNK frame with stream_id (Protocol v2)
+            # CHUNK(s)
+            offset = 0
+            seq = 0
+            while offset < len(arg.value):
+                chunk_size = min(len(arg.value) - offset, max_chunk)
+                chunk_data = arg.value[offset:offset + chunk_size]
                 chunk_frame = Frame.chunk(request_id, stream_id, seq, chunk_data)
                 try:
                     await self._writer_queue.put(WriteFrame(chunk_frame))
                 except:
                     raise SendError()
+                offset += chunk_size
                 seq += 1
 
-        # Send STREAM_END
-        stream_end = Frame.stream_end(request_id, stream_id)
-        try:
-            await self._writer_queue.put(WriteFrame(stream_end))
-        except:
-            raise SendError()
+            # STREAM_END
+            stream_end = Frame.stream_end(request_id, stream_id)
+            try:
+                await self._writer_queue.put(WriteFrame(stream_end))
+            except:
+                raise SendError()
 
-        # Send END frame
+        # END closes the entire request
         end_frame = Frame.end(request_id, None)
         try:
             await self._writer_queue.put(WriteFrame(end_frame))
         except:
             raise SendError()
 
-        #print(f"[AsyncPluginHost] request: sent STREAM_START + {seq} CHUNK frames + STREAM_END + END for request_id={request_id}")
-
         return queue
 
-    async def call(
+    async def call_with_arguments(
         self,
         cap_urn: str,
-        payload: bytes,
-        content_type: str,
+        arguments: list,
     ) -> PluginResponse:
-        """Send a cap request and wait for the complete response
+        """Send a cap request with typed arguments and wait for the complete response.
 
         Args:
             cap_urn: Cap URN to invoke
-            payload: Request payload
-            content_type: Content type of payload
+            arguments: List of CapArgumentValue (media_urn + value bytes)
 
         Returns:
             Complete PluginResponse
@@ -784,7 +773,7 @@ class AsyncPluginHost:
         Raises:
             AsyncHostError: If call fails
         """
-        queue = await self.request(cap_urn, payload, content_type)
+        queue = await self.request_with_arguments(cap_urn, arguments)
         return await self._collect_response(queue)
 
     @staticmethod
@@ -864,23 +853,21 @@ class AsyncPluginHost:
         """Get the plugin manifest extracted from HELLO handshake"""
         return self.plugin_manifest
 
-    async def call_streaming(
+    async def call_streaming_with_arguments(
         self,
         cap_urn: str,
-        payload: bytes,
-        content_type: str,
+        arguments: list,
     ) -> StreamingResponse:
-        """Send a cap request and get a streaming response iterator
+        """Send a cap request with typed arguments and get a streaming response iterator.
 
         Args:
             cap_urn: Cap URN to invoke
-            payload: Request payload
-            content_type: Content type of payload
+            arguments: List of CapArgumentValue (media_urn + value bytes)
 
         Returns:
             StreamingResponse for iterating chunks
         """
-        queue = await self.request(cap_urn, payload, content_type)
+        queue = await self.request_with_arguments(cap_urn, arguments)
         return StreamingResponse(queue)
 
     async def send_heartbeat(self) -> None:
