@@ -38,7 +38,7 @@ def test_frame_type_roundtrip():
 # TEST172: Test FrameType::from_u8 returns None for values outside the valid discriminant range
 def test_invalid_frame_type():
     """Test invalid frame type values return None"""
-    assert FrameType.from_u8(8) is None, "value 8 is one past Heartbeat"
+    assert FrameType.from_u8(10) is None, "value 10 is one past StreamEnd"
     assert FrameType.from_u8(100) is None
     assert FrameType.from_u8(255) is None
 
@@ -54,6 +54,8 @@ def test_frame_type_discriminant_values():
     assert FrameType.LOG == 5
     assert FrameType.ERR == 6
     assert FrameType.HEARTBEAT == 7
+    assert FrameType.STREAM_START == 8
+    assert FrameType.STREAM_END == 9
 
 
 # TEST174: Test MessageId::new_uuid generates valid UUID that roundtrips through string conversion
@@ -328,10 +330,10 @@ def test_limits_default():
     assert limits.max_chunk == 262_144, "default max_chunk = 256 KB"
 
 
-# TEST199: Test PROTOCOL_VERSION is 1
+# TEST199: Test PROTOCOL_VERSION is 2
 def test_protocol_version_constant():
     """Test PROTOCOL_VERSION constant"""
-    assert PROTOCOL_VERSION == 1
+    assert PROTOCOL_VERSION == 2
 
 
 # TEST200: Test integer key constants match the protocol specification

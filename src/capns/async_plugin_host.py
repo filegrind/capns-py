@@ -110,6 +110,70 @@ class RecvError(AsyncHostError):
         super().__init__("Receive error: channel closed")
 
 
+class ChunkMissingStreamId(AsyncHostError):
+    """CHUNK frame missing stream_id (Protocol v2 violation)"""
+
+    def __init__(self):
+        super().__init__("CHUNK frame missing stream_id")
+
+
+class StreamAfterRequestEnd(AsyncHostError):
+    """Stream activity after END frame (Protocol v2 violation)"""
+
+    def __init__(self):
+        super().__init__("Stream activity after request END")
+
+
+class ChunkAfterStreamEnd(AsyncHostError):
+    """CHUNK for stream that already ended (Protocol v2 violation)"""
+
+    def __init__(self, stream_id: str):
+        super().__init__(f"CHUNK for ended stream: {stream_id}")
+        self.stream_id = stream_id
+
+
+class UnknownStreamId(AsyncHostError):
+    """CHUNK for unknown stream_id (Protocol v2 violation)"""
+
+    def __init__(self, stream_id: str):
+        super().__init__(f"Unknown stream_id: {stream_id}")
+        self.stream_id = stream_id
+
+
+class StreamStartMissingId(AsyncHostError):
+    """STREAM_START missing stream_id (Protocol v2 violation)"""
+
+    def __init__(self):
+        super().__init__("STREAM_START missing stream_id")
+
+
+class StreamStartMissingUrn(AsyncHostError):
+    """STREAM_START missing media_urn (Protocol v2 violation)"""
+
+    def __init__(self):
+        super().__init__("STREAM_START missing media_urn")
+
+
+class DuplicateStreamId(AsyncHostError):
+    """Duplicate stream_id in STREAM_START (Protocol v2 violation)"""
+
+    def __init__(self, stream_id: str):
+        super().__init__(f"Duplicate stream_id: {stream_id}")
+        self.stream_id = stream_id
+
+
+class Protocol(AsyncHostError):
+    """Generic protocol violation"""
+    pass
+
+
+@dataclass
+class StreamState:
+    """Stream state tracking for Protocol v2 multiplexing"""
+    media_urn: str
+    active: bool
+
+
 @dataclass
 class ResponseChunk:
     """A response chunk from a plugin"""
@@ -197,11 +261,19 @@ class Shutdown(WriterCommand):
     pass
 
 
+@dataclass
+class RequestState:
+    """Per-request state tracking (Protocol v2 stream multiplexing)"""
+    queue: asyncio.Queue
+    streams: List[tuple[str, StreamState]]  # (stream_id, state) - ordered
+    ended: bool
+
+
 class HostState:
     """Internal shared state for the async plugin host"""
 
     def __init__(self):
-        self.pending: Dict[MessageId, asyncio.Queue] = {}
+        self.pending: Dict[MessageId, RequestState] = {}
         self.pending_heartbeats: set = set()
         self.closed: bool = False
         self.capabilities: Dict[str, callable] = {}  # cap_urn -> async handler function
@@ -298,8 +370,8 @@ class AsyncPluginHost:
                     # EOF - plugin closed
                     state.closed = True
                     # Notify all pending requests
-                    for queue in state.pending.values():
-                        await queue.put(ProcessExited())
+                    for req_state in state.pending.values():
+                        await req_state.queue.put(ProcessExited())
                     break
 
                 # Handle heartbeats transparently
@@ -323,19 +395,55 @@ class AsyncPluginHost:
 
                 # Route frame to appropriate pending request
                 if frame.id in state.pending:
-                    queue = state.pending[frame.id]
+                    req_state = state.pending[frame.id]
                     should_remove = False
 
                     if frame.frame_type == FrameType.CHUNK:
-                        chunk = ResponseChunk(
-                            payload=frame.payload or b"",
-                            seq=frame.seq,
-                            offset=frame.offset,
-                            len=frame.len,
-                            is_eof=frame.is_eof(),
-                        )
-                        await queue.put(chunk)
-                        should_remove = chunk.is_eof
+                        # STRICT: Validate chunk has stream_id and stream is active (Protocol v2)
+                        try:
+                            stream_id = frame.stream_id
+                            if stream_id is None:
+                                await req_state.queue.put(ChunkMissingStreamId())
+                                should_remove = True
+                                continue
+
+                            # FAIL HARD: Request already ended
+                            if req_state.ended:
+                                await req_state.queue.put(StreamAfterRequestEnd())
+                                should_remove = True
+                                continue
+
+                            # FAIL HARD: Unknown or inactive stream
+                            stream_found = None
+                            for sid, stream_state in req_state.streams:
+                                if sid == stream_id:
+                                    stream_found = stream_state
+                                    break
+
+                            if stream_found is None:
+                                await req_state.queue.put(UnknownStreamId(stream_id))
+                                should_remove = True
+                                continue
+
+                            if not stream_found.active:
+                                await req_state.queue.put(ChunkAfterStreamEnd(stream_id))
+                                should_remove = True
+                                continue
+
+                            # ✅ Valid chunk for active stream
+                            is_eof = frame.is_eof()
+                            chunk = ResponseChunk(
+                                payload=frame.payload or b"",
+                                seq=frame.seq,
+                                offset=frame.offset,
+                                len=frame.len,
+                                is_eof=is_eof,
+                            )
+                            await req_state.queue.put(chunk)
+                            should_remove = is_eof
+                        except Exception as e:
+                            await req_state.queue.put(Protocol(f"CHUNK error: {e}"))
+                            should_remove = True
 
                     elif frame.frame_type == FrameType.RES:
                         chunk = ResponseChunk(
@@ -345,10 +453,11 @@ class AsyncPluginHost:
                             len=None,
                             is_eof=True,
                         )
-                        await queue.put(chunk)
+                        await req_state.queue.put(chunk)
                         should_remove = True
 
                     elif frame.frame_type == FrameType.END:
+                        req_state.ended = True
                         if frame.payload:
                             chunk = ResponseChunk(
                                 payload=frame.payload,
@@ -357,7 +466,7 @@ class AsyncPluginHost:
                                 len=frame.len,
                                 is_eof=True,
                             )
-                            await queue.put(chunk)
+                            await req_state.queue.put(chunk)
                         should_remove = True
 
                     elif frame.frame_type == FrameType.LOG:
@@ -367,11 +476,72 @@ class AsyncPluginHost:
                     elif frame.frame_type == FrameType.ERR:
                         code = frame.error_code() or "UNKNOWN"
                         message = frame.error_message() or "Unknown error"
-                        await queue.put(PluginError(code, message))
+                        await req_state.queue.put(PluginError(code, message))
                         should_remove = True
 
+                    elif frame.frame_type == FrameType.STREAM_START:
+                        # STRICT: Track new stream, FAIL HARD on violations
+                        try:
+                            stream_id = frame.stream_id
+                            if stream_id is None:
+                                await req_state.queue.put(StreamStartMissingId())
+                                should_remove = True
+                                continue
+
+                            media_urn = frame.media_urn
+                            if media_urn is None:
+                                await req_state.queue.put(StreamStartMissingUrn())
+                                should_remove = True
+                                continue
+
+                            # FAIL HARD: Request already ended
+                            if req_state.ended:
+                                await req_state.queue.put(StreamAfterRequestEnd())
+                                should_remove = True
+                                continue
+
+                            # FAIL HARD: Duplicate stream ID
+                            if any(sid == stream_id for sid, _ in req_state.streams):
+                                await req_state.queue.put(DuplicateStreamId(stream_id))
+                                should_remove = True
+                                continue
+
+                            # ✅ Track new stream
+                            req_state.streams.append((stream_id, StreamState(media_urn=media_urn, active=True)))
+                            should_remove = False
+                        except Exception as e:
+                            await req_state.queue.put(Protocol(f"STREAM_START error: {e}"))
+                            should_remove = True
+
+                    elif frame.frame_type == FrameType.STREAM_END:
+                        # STRICT: Mark stream as ended, FAIL HARD on violations
+                        try:
+                            stream_id = frame.stream_id
+                            if stream_id is None:
+                                await req_state.queue.put(Protocol("STREAM_END missing stream_id"))
+                                should_remove = True
+                                continue
+
+                            # FAIL HARD: Unknown stream
+                            stream_found = False
+                            for i, (sid, stream_state) in enumerate(req_state.streams):
+                                if sid == stream_id:
+                                    req_state.streams[i] = (sid, StreamState(media_urn=stream_state.media_urn, active=False))
+                                    stream_found = True
+                                    break
+
+                            if not stream_found:
+                                await req_state.queue.put(UnknownStreamId(stream_id))
+                                should_remove = True
+                                continue
+
+                            should_remove = False
+                        except Exception as e:
+                            await req_state.queue.put(Protocol(f"STREAM_END error: {e}"))
+                            should_remove = True
+
                     else:
-                        await queue.put(UnexpectedFrameType(frame.frame_type))
+                        await req_state.queue.put(UnexpectedFrameType(frame.frame_type))
                         should_remove = True
 
                     # Remove completed request
@@ -382,8 +552,8 @@ class AsyncPluginHost:
                 # Read error
                 state.closed = True
                 error = CborErrorWrapper(str(e))
-                for queue in state.pending.values():
-                    await queue.put(error)
+                for req_state in state.pending.values():
+                    await req_state.queue.put(error)
                 break
 
     async def request(
@@ -411,11 +581,20 @@ class AsyncPluginHost:
 
         request_id = MessageId.new_uuid()
 
-        # Create queue for responses
+        # Create queue for responses with Protocol v2 stream tracking
         queue = asyncio.Queue(maxsize=32)
-        self._state.pending[request_id] = queue
+        self._state.pending[request_id] = RequestState(
+            queue=queue,
+            streams=[],
+            ended=False
+        )
 
         max_chunk = self.limits.max_chunk
+
+        # Protocol v2: Use stream multiplexing for all requests
+        # Pattern: REQ (empty) + STREAM_START + CHUNK + STREAM_END + END
+        import uuid
+        stream_id = str(uuid.uuid4())
 
         # Automatic chunking for large request payloads (or empty payloads to avoid ambiguity)
         if 0 < len(payload) <= max_chunk:
@@ -426,8 +605,9 @@ class AsyncPluginHost:
             except:
                 raise SendError()
         else:
-            # Empty or large payload: send REQ + CHUNK frames + END
-            print(f"[AsyncPluginHost] request: large payload ({len(payload)} bytes), chunking with max_chunk={max_chunk}")
+            # Empty or large payload: use Protocol v2 stream multiplexing
+            # REQ (empty) + STREAM_START + CHUNK frames + STREAM_END + END
+            print(f"[AsyncPluginHost] request: large/empty payload ({len(payload)} bytes), using Protocol v2 streams with max_chunk={max_chunk}")
 
             # Send initial REQ frame with cap_urn and content_type, but empty payload
             request = Frame.req(request_id, cap_urn, b"", content_type)
@@ -436,42 +616,49 @@ class AsyncPluginHost:
             except:
                 raise SendError()
 
-            # Send payload in CHUNK frames
+            # Send STREAM_START
+            stream_start = Frame.stream_start(request_id, stream_id, "media:bytes")
+            try:
+                await self._writer_queue.put(WriteFrame(stream_start))
+            except:
+                raise SendError()
+
+            # Send payload in CHUNK frames with stream_id
             offset = 0
             seq = 0
 
-            if len(payload) == 0:
-                # Empty payload: send END frame immediately with no chunks
-                end_frame = Frame.end(request_id, b"")
-                try:
-                    await self._writer_queue.put(WriteFrame(end_frame))
-                except:
-                    raise SendError()
-            else:
-                # Non-empty payload: send CHUNK frames + END
+            if len(payload) > 0:
+                # Non-empty payload: send CHUNK frames
                 while offset < len(payload):
                     remaining = len(payload) - offset
                     chunk_size = min(remaining, max_chunk)
                     chunk_data = payload[offset:offset + chunk_size]
                     offset += chunk_size
 
-                    if offset < len(payload):
-                        # Not the last chunk - send CHUNK frame
-                        chunk_frame = Frame.chunk(request_id, seq, chunk_data)
-                        try:
-                            await self._writer_queue.put(WriteFrame(chunk_frame))
-                        except:
-                            raise SendError()
-                        seq += 1
-                    else:
-                        # Last chunk - send END frame
-                        end_frame = Frame.end(request_id, chunk_data)
-                        try:
-                            await self._writer_queue.put(WriteFrame(end_frame))
-                        except:
-                            raise SendError()
+                    # Send CHUNK frame with stream_id
+                    chunk_frame = Frame.chunk(request_id, seq, chunk_data)
+                    chunk_frame.stream_id = stream_id  # Set stream_id for Protocol v2
+                    try:
+                        await self._writer_queue.put(WriteFrame(chunk_frame))
+                    except:
+                        raise SendError()
+                    seq += 1
 
-            print(f"[AsyncPluginHost] request: sent {seq} chunk frames + END for request_id={request_id}")
+            # Send STREAM_END
+            stream_end = Frame.stream_end(request_id, stream_id)
+            try:
+                await self._writer_queue.put(WriteFrame(stream_end))
+            except:
+                raise SendError()
+
+            # Send END frame
+            end_frame = Frame.end(request_id, None)
+            try:
+                await self._writer_queue.put(WriteFrame(end_frame))
+            except:
+                raise SendError()
+
+            print(f"[AsyncPluginHost] request: sent STREAM_START + {seq} CHUNK frames + STREAM_END + END for request_id={request_id}")
 
         return queue
 

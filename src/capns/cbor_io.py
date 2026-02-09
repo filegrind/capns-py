@@ -138,6 +138,12 @@ def encode_frame(frame: Frame) -> bytes:
     if frame.cap is not None:
         frame_map[Keys.CAP] = frame.cap
 
+    if frame.stream_id is not None:
+        frame_map[Keys.STREAM_ID] = frame.stream_id
+
+    if frame.media_urn is not None:
+        frame_map[Keys.MEDIA_URN] = frame.media_urn
+
     try:
         return cbor2.dumps(frame_map)
     except Exception as e:
@@ -213,6 +219,8 @@ def decode_frame(data: bytes) -> Frame:
     offset = lookup.get(Keys.OFFSET)
     eof = lookup.get(Keys.EOF)
     cap = lookup.get(Keys.CAP)
+    stream_id = lookup.get(Keys.STREAM_ID)
+    media_urn = lookup.get(Keys.MEDIA_URN)
 
     return Frame(
         frame_type=frame_type,
@@ -226,6 +234,8 @@ def decode_frame(data: bytes) -> Frame:
         offset=offset,
         eof=eof,
         cap=cap,
+        stream_id=stream_id,
+        media_urn=media_urn,
     )
 
 

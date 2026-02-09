@@ -7,7 +7,7 @@ Frames use integer keys for compact encoding and support native binary payloads.
 
 Each frame is a CBOR map with integer keys:
 {
-  0: version (u8, always 1)
+  0: version (u8, always 2)
   1: frame_type (u8)
   2: id (bytes[16] or uint)
   3: seq (u64)
@@ -38,8 +38,8 @@ from enum import IntEnum
 from dataclasses import dataclass
 
 
-# Protocol version. Always 1 for this implementation.
-PROTOCOL_VERSION = 1
+# Protocol version. Version 2: Result-based emitters, negotiated chunk limits, per-request errors.
+PROTOCOL_VERSION = 2
 
 # Default maximum frame size (3.5 MB) - safe margin below 3.75MB limit
 # Larger payloads automatically use CHUNK frames
@@ -59,6 +59,8 @@ class FrameType(IntEnum):
     LOG = 5  # Log/progress message
     ERR = 6  # Error message
     HEARTBEAT = 7  # Health monitoring ping/pong
+    STREAM_START = 8  # Announce new stream for request (multiplexed streaming)
+    STREAM_END = 9  # End a specific stream (multiplexed streaming)
 
     @classmethod
     def from_u8(cls, v: int) -> Optional["FrameType"]:
@@ -197,13 +199,15 @@ class Frame:
         offset: Optional[int] = None,
         eof: Optional[bool] = None,
         cap: Optional[str] = None,
+        stream_id: Optional[str] = None,
+        media_urn: Optional[str] = None,
     ):
         """Create a new frame
 
         Args:
             frame_type: Type of frame
             id: Message ID for correlation
-            version: Protocol version (always 1)
+            version: Protocol version (always 2)
             seq: Sequence number within a stream
             content_type: Content type of payload (MIME-like)
             meta: Metadata map
@@ -212,6 +216,8 @@ class Frame:
             offset: Byte offset in chunked stream
             eof: End of stream marker
             cap: Cap URN (for requests)
+            stream_id: Stream identifier for multiplexing
+            media_urn: Media URN for stream typing
         """
         self.version = version
         self.frame_type = frame_type
@@ -224,6 +230,8 @@ class Frame:
         self.offset = offset
         self.eof = eof
         self.cap = cap
+        self.stream_id = stream_id
+        self.media_urn = media_urn
 
     @classmethod
     def new(cls, frame_type: FrameType, id: MessageId) -> "Frame":
@@ -343,6 +351,34 @@ class Frame:
         """
         return cls.new(FrameType.HEARTBEAT, id)
 
+    @classmethod
+    def stream_start(cls, req_id: MessageId, stream_id: str, media_urn: str) -> "Frame":
+        """Create a STREAM_START frame to announce a new stream within a request.
+        Used for multiplexed streaming - multiple streams can exist per request.
+
+        Args:
+            req_id: Request message ID this stream belongs to
+            stream_id: Unique identifier for this stream within the request
+            media_urn: Media URN describing the stream's content type
+        """
+        frame = cls.new(FrameType.STREAM_START, req_id)
+        frame.stream_id = stream_id
+        frame.media_urn = media_urn
+        return frame
+
+    @classmethod
+    def stream_end(cls, req_id: MessageId, stream_id: str) -> "Frame":
+        """Create a STREAM_END frame to mark completion of a specific stream.
+        After this, any CHUNK for this stream_id is a fatal protocol error.
+
+        Args:
+            req_id: Request message ID this stream belongs to
+            stream_id: Identifier of the stream that is ending
+        """
+        frame = cls.new(FrameType.STREAM_END, req_id)
+        frame.stream_id = stream_id
+        return frame
+
     def is_eof(self) -> bool:
         """Check if this is the final frame in a stream"""
         return self.eof is True
@@ -440,3 +476,5 @@ class Keys:
     OFFSET = 8
     EOF = 9
     CAP = 10
+    STREAM_ID = 11
+    MEDIA_URN = 12

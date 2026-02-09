@@ -653,3 +653,34 @@ def test_chunking_data_integrity_3x():
         reassembled += f.payload or b""
     assert len(reassembled) == 300
     assert reassembled == data, "pattern must be preserved across chunk boundaries"
+
+
+# TEST389: StreamStart encode/decode roundtrip preserves stream_id and media_urn
+def test_stream_start_roundtrip():
+    id = MessageId.new_uuid()
+    stream_id = "stream-abc-123"
+    media_urn = "media:bytes"
+
+    frame = Frame.stream_start(id, stream_id, media_urn)
+    encoded = encode_frame(frame)
+    decoded = decode_frame(encoded)
+
+    assert decoded.frame_type == FrameType.STREAM_START
+    assert decoded.id == id
+    assert decoded.stream_id == "stream-abc-123"
+    assert decoded.media_urn == "media:bytes"
+
+
+# TEST390: StreamEnd encode/decode roundtrip preserves stream_id, no media_urn
+def test_stream_end_roundtrip():
+    id = MessageId.new_uuid()
+    stream_id = "stream-xyz-789"
+
+    frame = Frame.stream_end(id, stream_id)
+    encoded = encode_frame(frame)
+    decoded = decode_frame(encoded)
+
+    assert decoded.frame_type == FrameType.STREAM_END
+    assert decoded.id == id
+    assert decoded.stream_id == "stream-xyz-789"
+    assert decoded.media_urn is None, "StreamEnd should not have media_urn"

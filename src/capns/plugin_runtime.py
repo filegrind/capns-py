@@ -135,21 +135,20 @@ class ManifestError(RuntimeError):
 class StreamEmitter(Protocol):
     """A streaming emitter that writes chunks immediately to the output.
     Thread-safe for use in concurrent handlers.
+    All methods raise exceptions on error - no silent failures.
     """
 
     def emit_bytes(self, payload: bytes) -> None:
-        """Emit raw bytes as a chunk immediately."""
+        """Emit raw bytes as a chunk immediately.
+        Raises: RuntimeError on write failure."""
         ...
 
     def emit(self, payload: Any) -> None:
         """Emit a JSON value as a chunk.
         The value is serialized to JSON bytes and sent as the chunk payload.
-        """
-        try:
-            data = json.dumps(payload).encode('utf-8')
-            self.emit_bytes(data)
-        except Exception as e:
-            print(f"[PluginRuntime] Failed to serialize payload: {e}", file=sys.stderr)
+        Raises: SerializeError on serialization failure, RuntimeError on write failure."""
+        data = json.dumps(payload).encode('utf-8')
+        self.emit_bytes(data)
 
     def emit_status(self, operation: str, details: str) -> None:
         """Emit a status/progress message."""
@@ -224,11 +223,12 @@ class PeerInvokerImpl:
     on the host while processing a request.
     """
 
-    def __init__(self, writer: FrameWriter, writer_lock: threading.Lock, pending_requests: Dict[str, PendingPeerRequest]):
+    def __init__(self, writer: FrameWriter, writer_lock: threading.Lock, pending_requests: Dict[str, PendingPeerRequest], max_chunk: Optional[int] = None):
         self.writer = writer
         self.writer_lock = writer_lock
         self.pending_requests = pending_requests
         self.pending_lock = threading.Lock()
+        self.max_chunk = max_chunk if max_chunk is not None else DEFAULT_MAX_CHUNK
 
     def invoke(self, cap_urn: str, arguments: List[CapArgumentValue]) -> Any:
         """Invoke a cap on the host with arguments.
@@ -362,14 +362,16 @@ class CliStreamEmitter:
 class ThreadSafeEmitter:
     """Thread-safe implementation of StreamEmitter that writes CBOR frames.
     Uses threading.Lock for safe concurrent access from multiple handler threads.
+    All methods raise exceptions on error - no silent failures.
     """
 
-    def __init__(self, writer: FrameWriter, request_id: MessageId, writer_lock: Optional[threading.Lock] = None):
+    def __init__(self, writer: FrameWriter, request_id: MessageId, writer_lock: Optional[threading.Lock] = None, max_chunk: Optional[int] = None):
         self.writer = writer
         self.request_id = request_id
         self.seq = 0
         self.seq_lock = threading.Lock()
         self.writer_lock = writer_lock if writer_lock is not None else threading.Lock()
+        self.max_chunk = max_chunk if max_chunk is not None else DEFAULT_MAX_CHUNK
 
     def emit_bytes(self, payload: bytes) -> None:
         with self.seq_lock:
@@ -379,32 +381,26 @@ class ThreadSafeEmitter:
         frame = Frame.chunk(self.request_id, seq, payload)
 
         with self.writer_lock:
-            try:
-                self.writer.write(frame)
-            except Exception as e:
-                print(f"[PluginRuntime] Failed to write chunk: {e}", file=sys.stderr)
+            self.writer.write(frame)
 
     def log(self, level: str, message: str) -> None:
         frame = Frame.log(self.request_id, level, message)
-
         with self.writer_lock:
-            try:
-                self.writer.write(frame)
-            except Exception as e:
-                print(f"[PluginRuntime] Failed to write log: {e}", file=sys.stderr)
+            self.writer.write(frame)
 
     def emit_status(self, operation: str, details: str) -> None:
         """Override emit_status to send LOG frames, not CHUNK frames.
         Status messages are progress/status updates, not response data.
+        Uses LOG frames (side-channel), best-effort - swallows exceptions to not disrupt handler.
         """
-        message = f"{operation}: {details}"
-        frame = Frame.log(self.request_id, "status", message)
-
-        with self.writer_lock:
-            try:
+        try:
+            message = f"{operation}: {details}"
+            frame = Frame.log(self.request_id, "status", message)
+            with self.writer_lock:
                 self.writer.write(frame)
-            except Exception as e:
-                print(f"[PluginRuntime] Failed to write status: {e}", file=sys.stderr)
+        except Exception:
+            # Best-effort status - don't fail handler if status write fails
+            pass
 
 
 # Handler function type
@@ -805,11 +801,11 @@ class PluginRuntime:
 
                 # Spawn handler in separate thread - main loop continues immediately
                 def handler_thread():
-                    emitter = ThreadSafeEmitter(writer, request_id, writer_lock)
+                    emitter = ThreadSafeEmitter(writer, request_id, writer_lock, max_chunk)
                     # Note: writer is shared via emitter, emitter handles locking via writer_lock
 
                     # Create peer invoker for bidirectional communication
-                    peer_invoker = PeerInvokerImpl(writer, writer_lock, pending_peer_requests)
+                    peer_invoker = PeerInvokerImpl(writer, writer_lock, pending_peer_requests, max_chunk)
 
                     # Extract effective payload from arguments if content_type is CBOR
                     try:
@@ -942,8 +938,8 @@ class PluginRuntime:
 
                     # Spawn thread to invoke handler (same pattern as REQ handling)
                     def handle_chunked_request():
-                        emitter = ThreadSafeEmitter(writer, request_id, writer_lock)
-                        peer_invoker = PeerInvokerImpl(writer, writer_lock, pending_peer_requests)
+                        emitter = ThreadSafeEmitter(writer, request_id, writer_lock, max_chunk)
+                        peer_invoker = PeerInvokerImpl(writer, writer_lock, pending_peer_requests, max_chunk)
 
                         # Extract effective payload from arguments if content_type is CBOR
                         try:
