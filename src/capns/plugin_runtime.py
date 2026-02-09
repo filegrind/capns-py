@@ -468,23 +468,17 @@ HandlerFn = Callable[[bytes, StreamEmitter, PeerInvoker], bytes]
 
 
 def extract_effective_payload(
-    payload: bytes,
-    content_type: Optional[str],
+    streams: list,
     cap_urn: str
 ) -> bytes:
-    """Extract the effective payload from a REQ frame.
+    """Extract the effective payload from accumulated request streams.
 
-    If the content_type is "application/cbor", the payload is expected to be
-    CBOR arguments: `[{media_urn: string, value: bytes}, ...]`
-    The function extracts the value whose media_urn matches the cap's input type.
+    Each stream is a (stream_id, PendingStream) tuple where PendingStream has
+    media_urn and chunks. The function finds the stream whose media_urn matches
+    the cap's expected input type using semantic URN matching.
 
-    For other content types (or if content_type is None), returns the raw payload.
+    This matches the Rust plugin runtime's behavior exactly.
     """
-    # Check if this is CBOR arguments
-    if content_type != "application/cbor":
-        # Not CBOR arguments - return raw payload
-        return payload
-
     # Parse the cap URN to get the expected input media URN
     try:
         cap = CapUrn.from_string(cap_urn)
@@ -497,41 +491,32 @@ def extract_effective_payload(
     except Exception:
         expected_media_urn = None
 
-    # Parse the CBOR payload as an array of argument maps
-    try:
-        cbor_value = cbor2.loads(payload)
-    except Exception as e:
-        raise DeserializeError(f"Failed to parse CBOR arguments: {e}")
-
-    if not isinstance(cbor_value, list):
-        raise DeserializeError("CBOR arguments must be an array")
-
-    # Find the argument with matching media_urn
-    for arg in cbor_value:
-        if not isinstance(arg, dict):
+    # Find the stream whose media_urn matches the expected input
+    for _stream_id, stream in streams:
+        if not stream.complete:
             continue
 
-        media_urn_str = arg.get("media_urn")
-        value = arg.get("value")
+        stream_data = b''.join(stream.chunks)
 
-        if media_urn_str is None or value is None:
-            continue
-
-        # Check if this argument matches the expected input using semantic URN matching
         if expected_media_urn is not None:
             try:
-                arg_urn = MediaUrn.from_string(media_urn_str)
-                # Use semantic matching in both directions
+                arg_urn = MediaUrn.from_string(stream.media_urn)
                 fwd = arg_urn.conforms_to(expected_media_urn)
                 rev = expected_media_urn.conforms_to(arg_urn)
                 if fwd or rev:
-                    return value
+                    return stream_data
             except Exception:
                 continue
 
-    # No matching argument found - this is an error, no fallbacks
+    # If only one stream, return it (single-argument case)
+    complete_streams = [(sid, s) for sid, s in streams if s.complete]
+    if len(complete_streams) == 1:
+        return b''.join(complete_streams[0][1].chunks)
+
+    # No matching stream found
     raise DeserializeError(
-        f"No argument found matching expected input media type '{expected_input}' in CBOR arguments"
+        f"No stream found matching expected input media type '{expected_input}' "
+        f"(streams: {[s.media_urn for _, s in streams]})"
     )
 
 
@@ -732,14 +717,17 @@ class PluginRuntime:
         if handler is None:
             raise NoHandlerError(f"No handler registered for cap '{cap.urn_string()}'")
 
-        # Build arguments from CLI
+        # Build arguments from CLI and convert to synthetic streams
         cli_args = args[2:]
-        raw_payload = self.build_payload_from_cli(cap, cli_args)
+        arguments = self.build_arguments_from_cli(cap, cli_args)
+        synthetic_streams = [
+            (f"arg-{i}", PendingStream(media_urn=arg.media_urn, chunks=[arg.value], complete=True))
+            for i, arg in enumerate(arguments)
+        ]
 
-        # Extract effective payload (simulates what CBOR mode does)
+        # Extract effective payload from synthetic streams
         payload = extract_effective_payload(
-            raw_payload,
-            "application/cbor",
+            synthetic_streams,
             cap.urn_string()
         )
 
@@ -952,18 +940,6 @@ class PluginRuntime:
                             pending_req.ended = True
 
                 if pending_req:
-                    # Concatenate all complete streams into final payload (in order)
-                    all_chunks = []
-                    for _sid, stream in pending_req.streams:
-                        if stream.complete:
-                            all_chunks.extend(stream.chunks)
-
-                    # Add END frame payload if present
-                    if frame.payload:
-                        all_chunks.append(frame.payload)
-
-                    raw_payload = b''.join(all_chunks)
-
                     # Find handler
                     handler = self.find_handler(pending_req.cap_urn)
                     if not handler:
@@ -977,7 +953,7 @@ class PluginRuntime:
 
                     # Clone what we need for the handler thread
                     request_id = frame.id
-                    content_type = pending_req.content_type
+                    streams_snapshot = list(pending_req.streams)
                     cap_urn_clone = pending_req.cap_urn
                     max_chunk = self.limits.max_chunk
 
@@ -988,11 +964,10 @@ class PluginRuntime:
                         emitter = ThreadSafeEmitter(writer, request_id, response_stream_id, "media:bytes", writer_lock, max_chunk)
                         peer_invoker = PeerInvokerImpl(writer, writer_lock, pending_peer_requests, max_chunk)
 
-                        # Extract effective payload from arguments if content_type is CBOR
+                        # Extract effective payload from streams
                         try:
                             payload = extract_effective_payload(
-                                raw_payload,
-                                content_type,
+                                streams_snapshot,
                                 cap_urn_clone
                             )
                         except Exception as e:
@@ -1325,20 +1300,16 @@ class PluginRuntime:
             except IOError as e:
                 raise IoRuntimeError(f"Failed to read file '{path_value}': {e}")
 
-    def build_payload_from_cli(self, cap: Cap, cli_args: List[str]) -> bytes:
-        """Build payload from CLI arguments based on cap's arg definitions.
-
-        Returns CBOR-encoded array of CapArgumentValue objects.
-        This matches the format used in CBOR mode for consistency.
-        """
+    def build_arguments_from_cli(self, cap: Cap, cli_args: List[str]) -> List[CapArgumentValue]:
+        """Build CapArgumentValue list from CLI arguments based on cap's arg definitions."""
         # Check for stdin data if cap accepts stdin
         stdin_data = None
         if cap.accepts_stdin():
             stdin_data = self._read_stdin_if_available()
 
-        # If no arguments are defined but stdin data exists, use it as raw payload
+        # If no arguments are defined but stdin data exists, wrap as single argument
         if not cap.get_args() and stdin_data is not None:
-            return stdin_data
+            return [CapArgumentValue(cap.in_spec(), stdin_data)]
 
         # Build list of CapArgumentValue objects
         arguments: List[CapArgumentValue] = []
@@ -1401,19 +1372,7 @@ class PluginRuntime:
                     value=value
                 ))
 
-        # If we have arguments, encode as CBOR array
-        if arguments:
-            cbor_args = [
-                {
-                    "media_urn": arg.media_urn,
-                    "value": arg.value
-                }
-                for arg in arguments
-            ]
-            return cbor2.dumps(cbor_args)
-
-        # No arguments and no stdin
-        return b''
+        return arguments
 
     def _extract_arg_value(
         self,

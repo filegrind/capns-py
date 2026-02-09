@@ -18,6 +18,7 @@ from capns.plugin_runtime import (
     UnknownSubcommandError,
     ManifestError,
     PeerResponseError,
+    PendingStream,
 )
 from capns.caller import CapArgumentValue
 from capns.manifest import CapManifest
@@ -189,94 +190,102 @@ def test_with_manifest_struct():
     assert runtime.manifest is not None
 
 
-# TEST259: Test extract_effective_payload with non-CBOR content_type returns raw payload unchanged
+# TEST259: Test extract_effective_payload with single stream matching cap in_spec
 def test_extract_effective_payload_non_cbor():
-    payload = b"raw data"
-    result = extract_effective_payload(payload, "application/json", "cap:op=test")
-    assert result == payload, "non-CBOR must return raw payload"
-
-
-# TEST260: Test extract_effective_payload with None content_type returns raw payload unchanged
-def test_extract_effective_payload_no_content_type():
-    payload = b"raw data"
-    result = extract_effective_payload(payload, None, "cap:op=test")
-    assert result == payload
-
-
-# TEST261: Test extract_effective_payload with CBOR content extracts matching argument value
-def test_extract_effective_payload_cbor_match():
-    # Build CBOR arguments: [{media_urn: "media:string;textable;form=scalar", value: bytes("hello")}]
-    args = [
-        {
-            "media_urn": "media:string;textable;form=scalar",
-            "value": b"hello"
-        }
+    # Single stream with data matching the cap's input spec
+    streams = [
+        ("stream-0", PendingStream(media_urn="media:bytes", chunks=[b"raw data"], complete=True))
     ]
-    payload = cbor2.dumps(args)
+    result = extract_effective_payload(streams, "cap:in=media:bytes;op=test;out=*")
+    assert result == b"raw data", "Should extract matching stream"
 
-    # The cap URN has in=media:string;textable;form=scalar
+
+# TEST260: Test extract_effective_payload with wildcard in_spec accepts any stream
+def test_extract_effective_payload_no_content_type():
+    streams = [
+        ("stream-0", PendingStream(media_urn="media:bytes", chunks=[b"raw data"], complete=True))
+    ]
+    result = extract_effective_payload(streams, "cap:in=*;op=test;out=*")
+    assert result == b"raw data", "Wildcard should accept any stream"
+
+
+# TEST261: Test extract_effective_payload extracts matching stream by media URN
+def test_extract_effective_payload_cbor_match():
+    # Stream with media URN that matches cap's input spec
+    streams = [
+        ("stream-0", PendingStream(
+            media_urn="media:string;textable;form=scalar",
+            chunks=[b"hello"],
+            complete=True
+        ))
+    ]
     result = extract_effective_payload(
-        payload,
-        "application/cbor",
+        streams,
         "cap:in=media:string;textable;form=scalar;op=test;out=*"
     )
     assert result == b"hello"
 
 
-# TEST262: Test extract_effective_payload with CBOR content fails when no argument matches expected input
+# TEST262: Test extract_effective_payload fails when no stream matches expected input
 def test_extract_effective_payload_cbor_no_match():
-    args = [
-        {
-            "media_urn": "media:other-type",
-            "value": b"data"
-        }
+    # Multiple streams, none match cap's specific input spec
+    streams = [
+        ("stream-0", PendingStream(
+            media_urn="media:other-type",
+            chunks=[b"wrong1"],
+            complete=True
+        )),
+        ("stream-1", PendingStream(
+            media_urn="media:different-type",
+            chunks=[b"wrong2"],
+            complete=True
+        ))
     ]
-    payload = cbor2.dumps(args)
 
     with pytest.raises(DeserializeError) as exc_info:
         extract_effective_payload(
-            payload,
-            "application/cbor",
+            streams,
             "cap:in=media:string;textable;form=scalar;op=test;out=*"
         )
 
-    assert "No argument found matching" in str(exc_info.value)
+    assert "No stream found matching" in str(exc_info.value)
 
 
-# TEST263: Test extract_effective_payload with invalid CBOR bytes returns deserialization error
+# TEST263: Test extract_effective_payload with empty streams returns error
 def test_extract_effective_payload_invalid_cbor():
-    with pytest.raises(DeserializeError):
+    # No streams provided
+    streams = []
+    with pytest.raises(DeserializeError) as exc_info:
         extract_effective_payload(
-            b"not cbor",
-            "application/cbor",
-            "cap:in=*;op=test;out=*"
+            streams,
+            "cap:in=media:bytes;op=test;out=*"
         )
+    assert "No stream found matching" in str(exc_info.value)
 
 
-# TEST264: Test extract_effective_payload with CBOR non-array (e.g. map) returns error
+# TEST264: Test extract_effective_payload with incomplete stream skips it
 def test_extract_effective_payload_cbor_not_array():
-    value = {}
-    payload = cbor2.dumps(value)
+    # Stream that's not complete
+    streams = [
+        ("stream-0", PendingStream(media_urn="media:bytes", chunks=[b"data"], complete=False))
+    ]
 
     with pytest.raises(DeserializeError) as exc_info:
         extract_effective_payload(
-            payload,
-            "application/cbor",
-            "cap:in=*;op=test;out=*"
+            streams,
+            "cap:in=media:bytes;op=test;out=*"
         )
 
-    assert "must be an array" in str(exc_info.value)
+    assert "No stream found matching" in str(exc_info.value)
 
 
 # TEST265: Test extract_effective_payload with invalid cap URN returns CapUrn error
 def test_extract_effective_payload_invalid_cap_urn():
-    args = []
-    payload = cbor2.dumps(args)
+    streams = []
 
     with pytest.raises(CapUrnError):
         extract_effective_payload(
-            payload,
-            "application/cbor",
+            streams,
             "not-a-cap-urn"
         )
 
@@ -362,45 +371,45 @@ def test_handler_replacement():
     assert result == b"second", "later registration must replace earlier"
 
 
-# TEST272: Test extract_effective_payload CBOR with multiple arguments selects the correct one
+# TEST272: Test extract_effective_payload with multiple streams selects the correct one
 def test_extract_effective_payload_multiple_args():
-    args = [
-        {
-            "media_urn": "media:other-type;textable",
-            "value": b"wrong"
-        },
-        {
-            "media_urn": "media:model-spec;textable;form=scalar",
-            "value": b"correct"
-        }
+    # Multiple streams, only one matches the cap's input spec
+    streams = [
+        ("stream-0", PendingStream(
+            media_urn="media:other-type;textable",
+            chunks=[b"wrong"],
+            complete=True
+        )),
+        ("stream-1", PendingStream(
+            media_urn="media:model-spec;textable;form=scalar",
+            chunks=[b"correct"],
+            complete=True
+        ))
     ]
-    payload = cbor2.dumps(args)
 
     result = extract_effective_payload(
-        payload,
-        "application/cbor",
+        streams,
         "cap:in=media:model-spec;textable;form=scalar;op=infer;out=*"
     )
     assert result == b"correct"
 
 
-# TEST273: Test extract_effective_payload with binary data in CBOR value (not just text)
+# TEST273: Test extract_effective_payload with binary data in stream (not just text)
 def test_extract_effective_payload_binary_value():
     binary_data = bytes(range(256))
-    args = [
-        {
-            "media_urn": "media:pdf;bytes",
-            "value": binary_data
-        }
+    streams = [
+        ("stream-0", PendingStream(
+            media_urn="media:pdf;bytes",
+            chunks=[binary_data],
+            complete=True
+        ))
     ]
-    payload = cbor2.dumps(args)
 
     result = extract_effective_payload(
-        payload,
-        "application/cbor",
+        streams,
         "cap:in=media:pdf;bytes;op=process;out=*"
     )
-    assert result == binary_data, "binary values must roundtrip through CBOR extraction"
+    assert result == binary_data, "binary values must roundtrip through stream extraction"
 
 
 # =============================================================================
@@ -467,14 +476,14 @@ def test_336_file_path_reads_file_passes_bytes(tmp_path):
     # Simulate CLI invocation: plugin process /path/to/file.pdf
     cli_args = [str(test_file)]
     cap = runtime.manifest.caps[0]
-    raw_payload = runtime.build_payload_from_cli(cap, cli_args)
+    arguments = runtime.build_arguments_from_cli(cap, cli_args)
 
     # Extract effective payload (simulates what run_cli_mode does)
-    payload = extract_effective_payload(
-        raw_payload,
-        "application/cbor",
-        cap.urn_string()
-    )
+    streams = [
+        (f"arg-{i}", PendingStream(media_urn=arg.media_urn, chunks=[arg.value], complete=True))
+        for i, arg in enumerate(arguments)
+    ]
+    payload = extract_effective_payload(streams, cap.urn_string())
 
     handler_fn = runtime.find_handler(cap.urn_string())
     emitter = CliStreamEmitter()
@@ -976,14 +985,14 @@ def test_350_full_cli_mode_with_file_path_integration(tmp_path):
     # Simulate full CLI invocation
     cli_args = [str(test_file)]
     cap = runtime.manifest.caps[0]
-    raw_payload = runtime.build_payload_from_cli(cap, cli_args)
+    arguments = runtime.build_arguments_from_cli(cap, cli_args)
 
     # Extract effective payload (what run_cli_mode does)
-    payload = extract_effective_payload(
-        raw_payload,
-        "application/cbor",
-        cap.urn_string()
-    )
+    streams = [
+        (f"arg-{i}", PendingStream(media_urn=arg.media_urn, chunks=[arg.value], complete=True))
+        for i, arg in enumerate(arguments)
+    ]
+    payload = extract_effective_payload(streams, cap.urn_string())
 
     handler_fn = runtime.find_handler(cap.urn_string())
     emitter = CliStreamEmitter()
@@ -1093,25 +1102,15 @@ def test_353_cbor_payload_format_consistency():
 
     cli_args = ["test value"]
     cap = runtime.manifest.caps[0]
-    payload = runtime.build_payload_from_cli(cap, cli_args)
+    arguments = runtime.build_arguments_from_cli(cap, cli_args)
 
-    # Decode CBOR payload
-    args_array = cbor2.loads(payload)
+    # Verify structure of CapArgumentValue list
+    assert len(arguments) == 1, "Should have 1 argument"
 
-    assert len(args_array) == 1, "Should have 1 argument"
-
-    # Verify structure: { media_urn: "...", value: bytes }
-    arg_map = args_array[0]
-    assert isinstance(arg_map, dict), "Argument should be a dict"
-    assert len(arg_map) == 2, "Argument should have media_urn and value"
-
-    # Check media_urn key
-    assert "media_urn" in arg_map
-    assert arg_map["media_urn"] == "media:text;textable;form=scalar"
-
-    # Check value key
-    assert "value" in arg_map
-    assert arg_map["value"] == b"test value"
+    # Check the CapArgumentValue object
+    arg = arguments[0]
+    assert arg.media_urn == "media:text;textable;form=scalar"
+    assert arg.value == b"test value"
 
 
 # TEST354: Glob pattern with no matches produces empty array
@@ -1379,15 +1378,15 @@ def test_360_extract_effective_payload_with_file_data(tmp_path):
     cli_args = [str(test_file)]
     cap = runtime.manifest.caps[0]
 
-    # Build CBOR payload (what build_payload_from_cli does)
-    raw_payload = runtime.build_payload_from_cli(cap, cli_args)
+    # Build arguments (what build_arguments_from_cli does)
+    arguments = runtime.build_arguments_from_cli(cap, cli_args)
 
     # Extract effective payload (what run_cli_mode does)
-    effective = extract_effective_payload(
-        raw_payload,
-        "application/cbor",
-        cap.urn_string()
-    )
+    streams = [
+        (f"arg-{i}", PendingStream(media_urn=arg.media_urn, chunks=[arg.value], complete=True))
+        for i, arg in enumerate(arguments)
+    ]
+    effective = extract_effective_payload(streams, cap.urn_string())
 
     # The effective payload should be the raw PDF bytes
     assert effective == pdf_content, "extract_effective_payload should extract file bytes"
