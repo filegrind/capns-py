@@ -177,6 +177,29 @@ class StreamState:
 
 
 @dataclass
+class PeerIncomingStream:
+    """Stream state for an incoming peer request (plugin → host)"""
+    media_urn: str
+    chunks: list  # List[bytes]
+    complete: bool
+
+
+@dataclass
+class PeerIncomingRequest:
+    """Tracking for incoming peer requests using Protocol v2 stream multiplexing.
+
+    When a plugin calls a host capability via PeerInvoker, it sends:
+    REQ(empty) + STREAM_START + CHUNK(s) + STREAM_END + END
+
+    We accumulate the stream data here before dispatching to the handler.
+    """
+    cap_urn: str
+    content_type: Optional[str]
+    streams: list  # List[tuple[str, PeerIncomingStream]] - ordered
+    ended: bool
+
+
+@dataclass
 class ResponseChunk:
     """A response chunk from a plugin"""
     payload: bytes
@@ -276,6 +299,7 @@ class HostState:
 
     def __init__(self, limits: Limits = None):
         self.pending: Dict[MessageId, RequestState] = {}
+        self.peer_incoming: Dict[MessageId, PeerIncomingRequest] = {}
         self.pending_heartbeats: set = set()
         self.closed: bool = False
         self.capabilities: Dict[str, callable] = {}  # cap_urn -> async handler function
@@ -389,14 +413,106 @@ class AsyncPluginHost:
                     continue
 
                 # Handle incoming REQ frames (peer invocations from plugin)
+                # Protocol v2: Plugin sends REQ(empty) + STREAM_START + CHUNK(s) + STREAM_END + END
                 if frame.frame_type == FrameType.REQ and frame.id not in state.pending:
-                    # This is a peer invocation - plugin is calling a host capability
-                    asyncio.create_task(
-                        AsyncPluginHost._handle_peer_request(frame, state, writer_queue)
+                    # Start accumulating peer request — handler dispatched on END
+                    state.peer_incoming[frame.id] = PeerIncomingRequest(
+                        cap_urn=frame.cap,
+                        content_type=frame.content_type,
+                        streams=[],
+                        ended=False,
                     )
                     continue
 
-                # Route frame to appropriate pending request
+                # Route frames for peer incoming requests (plugin → host)
+                if frame.id in state.peer_incoming:
+                    peer_req = state.peer_incoming[frame.id]
+
+                    if frame.frame_type == FrameType.STREAM_START:
+                        stream_id = frame.stream_id
+                        media_urn = frame.media_urn
+                        if stream_id is None:
+                            del state.peer_incoming[frame.id]
+                            err = Frame.err(frame.id, "PROTOCOL_ERROR", "STREAM_START missing stream_id")
+                            await writer_queue.put(WriteFrame(err))
+                            continue
+                        if media_urn is None:
+                            del state.peer_incoming[frame.id]
+                            err = Frame.err(frame.id, "PROTOCOL_ERROR", "STREAM_START missing media_urn")
+                            await writer_queue.put(WriteFrame(err))
+                            continue
+                        if peer_req.ended:
+                            del state.peer_incoming[frame.id]
+                            err = Frame.err(frame.id, "PROTOCOL_ERROR", "STREAM_START after END")
+                            await writer_queue.put(WriteFrame(err))
+                            continue
+                        if any(sid == stream_id for sid, _ in peer_req.streams):
+                            del state.peer_incoming[frame.id]
+                            err = Frame.err(frame.id, "PROTOCOL_ERROR", f"Duplicate stream_id: {stream_id}")
+                            await writer_queue.put(WriteFrame(err))
+                            continue
+                        peer_req.streams.append((stream_id, PeerIncomingStream(
+                            media_urn=media_urn, chunks=[], complete=False
+                        )))
+
+                    elif frame.frame_type == FrameType.CHUNK:
+                        stream_id = frame.stream_id
+                        if stream_id is None:
+                            del state.peer_incoming[frame.id]
+                            err = Frame.err(frame.id, "PROTOCOL_ERROR", "CHUNK missing stream_id")
+                            await writer_queue.put(WriteFrame(err))
+                            continue
+                        if peer_req.ended:
+                            del state.peer_incoming[frame.id]
+                            continue
+                        stream_found = None
+                        for sid, s in peer_req.streams:
+                            if sid == stream_id:
+                                stream_found = s
+                                break
+                        if stream_found is None:
+                            del state.peer_incoming[frame.id]
+                            err = Frame.err(frame.id, "PROTOCOL_ERROR", f"CHUNK for unknown stream_id={stream_id}")
+                            await writer_queue.put(WriteFrame(err))
+                            continue
+                        if stream_found.complete:
+                            del state.peer_incoming[frame.id]
+                            err = Frame.err(frame.id, "PROTOCOL_ERROR", f"CHUNK after STREAM_END for stream_id={stream_id}")
+                            await writer_queue.put(WriteFrame(err))
+                            continue
+                        if frame.payload:
+                            stream_found.chunks.append(frame.payload)
+
+                    elif frame.frame_type == FrameType.STREAM_END:
+                        stream_id = frame.stream_id
+                        if stream_id is None:
+                            del state.peer_incoming[frame.id]
+                            err = Frame.err(frame.id, "PROTOCOL_ERROR", "STREAM_END missing stream_id")
+                            await writer_queue.put(WriteFrame(err))
+                            continue
+                        for sid, s in peer_req.streams:
+                            if sid == stream_id:
+                                s.complete = True
+                                break
+
+                    elif frame.frame_type == FrameType.END:
+                        # Concatenate all stream chunks in order
+                        payload = bytearray()
+                        for _sid, s in peer_req.streams:
+                            for chunk in s.chunks:
+                                payload.extend(chunk)
+                        del state.peer_incoming[frame.id]
+                        # Dispatch handler with collected payload
+                        asyncio.create_task(
+                            AsyncPluginHost._handle_peer_request(
+                                frame.id, peer_req.cap_urn, bytes(payload),
+                                peer_req.content_type, state, writer_queue
+                            )
+                        )
+
+                    continue
+
+                # Route frame to appropriate pending request (host-initiated)
                 if frame.id in state.pending:
                     req_state = state.pending[frame.id]
                     should_remove = False
@@ -595,7 +711,7 @@ class AsyncPluginHost:
 
         # Protocol v2: ALL requests use stream multiplexing (no backward compatibility)
         # REQ (empty) + STREAM_START + CHUNK frames (if non-empty) + STREAM_END + END
-        print(f"[AsyncPluginHost] request: payload ({len(payload)} bytes), using Protocol v2 streams with max_chunk={max_chunk}")
+        #print(f"[AsyncPluginHost] request: payload ({len(payload)} bytes), using Protocol v2 streams with max_chunk={max_chunk}")
 
         # Send initial REQ frame with cap_urn and content_type, but empty payload
         request = Frame.req(request_id, cap_urn, b"", content_type)
@@ -645,7 +761,7 @@ class AsyncPluginHost:
         except:
             raise SendError()
 
-        print(f"[AsyncPluginHost] request: sent STREAM_START + {seq} CHUNK frames + STREAM_END + END for request_id={request_id}")
+        #print(f"[AsyncPluginHost] request: sent STREAM_START + {seq} CHUNK frames + STREAM_END + END for request_id={request_id}")
 
         return queue
 
@@ -814,17 +930,21 @@ class AsyncPluginHost:
         self._state.capabilities[cap_urn] = handler
 
     @staticmethod
-    async def _handle_peer_request(frame, state, writer_queue):
-        """Handle an incoming REQ frame from the plugin (peer invocation).
+    async def _handle_peer_request(request_id, cap_urn, payload, content_type, state, writer_queue):
+        """Handle a peer invocation from the plugin after stream data is collected.
+
+        Protocol v2: The plugin sends REQ(empty) + STREAM_START + CHUNK(s) + STREAM_END + END.
+        By the time this is called, all stream data has been concatenated into `payload`.
 
         Args:
-            frame: The REQ frame from the plugin
+            request_id: MessageId from the original REQ frame
+            cap_urn: Capability URN being invoked
+            payload: Collected stream data (raw bytes)
+            content_type: Content type from the REQ frame
             state: HostState with registered capabilities
             writer_queue: Queue for sending response frames
         """
         try:
-            cap_urn = frame.cap
-
             # Find matching handler
             handler = None
 
@@ -832,9 +952,8 @@ class AsyncPluginHost:
             try:
                 cap_urn_obj = CapUrn.from_string(cap_urn)
             except CapUrnError as e:
-                # Malformed cap URN in request - send error back to caller
                 err_frame = Frame.err(
-                    frame.id,
+                    request_id,
                     "INVALID_CAP_URN",
                     f"Malformed cap URN in request: {cap_urn}: {e}"
                 )
@@ -844,61 +963,37 @@ class AsyncPluginHost:
             cap_op = cap_urn_obj.get_tag("op")
 
             for registered_urn, registered_handler in state.capabilities.items():
-                # Parse registered URN - fail hard if malformed (this is a plugin bug)
                 try:
                     reg_urn_obj = CapUrn.from_string(registered_urn)
                 except CapUrnError as e:
-                    # Plugin registered a malformed URN - this is a fatal error
-                    import logging
-                    logging.error(f"Plugin registered malformed cap URN '{registered_urn}': {e}")
                     raise RuntimeError(f"Plugin has malformed registered cap URN: {registered_urn}: {e}")
 
                 reg_op = reg_urn_obj.get_tag("op")
 
-                # Match on operation name
                 if cap_op and reg_op and cap_op == reg_op:
                     handler = registered_handler
                     break
 
             if handler is None:
-                # No handler found - send ERR frame
                 err_frame = Frame.err(
-                    frame.id,
+                    request_id,
                     "NO_HANDLER",
                     f"No handler registered for capability: {cap_urn}"
                 )
                 await writer_queue.put(WriteFrame(err_frame))
                 return
 
-            # Execute handler
+            # Execute handler with the raw stream payload
             try:
-                # Decode the payload - PeerInvoker sends arguments as CBOR array of {value, media_urn}
-                import cbor2
-                payload = frame.payload or b""
-
-                # Try to decode as CBOR array of arguments
-                try:
-                    args = cbor2.loads(payload)
-                    if isinstance(args, list) and len(args) > 0:
-                        # First argument's value
-                        arg = args[0]
-                        if isinstance(arg, dict) and "value" in arg:
-                            payload = arg["value"]
-                            if isinstance(payload, str):
-                                payload = payload.encode()
-                except:
-                    # Not CBOR args format, use as-is
-                    pass
-
                 result = await handler(payload)
 
                 # Protocol v2: Send response using stream multiplexing
                 import uuid
                 peer_stream_id = str(uuid.uuid4())
-                peer_media_urn = frame.content_type or "media:bytes"
+                peer_media_urn = content_type or "media:bytes"
 
                 # STREAM_START
-                await writer_queue.put(WriteFrame(Frame.stream_start(frame.id, peer_stream_id, peer_media_urn)))
+                await writer_queue.put(WriteFrame(Frame.stream_start(request_id, peer_stream_id, peer_media_urn)))
 
                 # Send raw result bytes (NOT CBOR-encoded).
                 # The Rust host sends chunk.payload directly — peer invokers
@@ -914,35 +1009,33 @@ class AsyncPluginHost:
                         chunk_size = min(len(raw_result) - offset, max_chunk)
                         chunk_data = raw_result[offset:offset + chunk_size]
                         offset += chunk_size
-                        await writer_queue.put(WriteFrame(Frame.chunk(frame.id, peer_stream_id, seq, chunk_data)))
+                        await writer_queue.put(WriteFrame(Frame.chunk(request_id, peer_stream_id, seq, chunk_data)))
                         seq += 1
 
                 # STREAM_END
-                await writer_queue.put(WriteFrame(Frame.stream_end(frame.id, peer_stream_id)))
+                await writer_queue.put(WriteFrame(Frame.stream_end(request_id, peer_stream_id)))
 
                 # END
-                await writer_queue.put(WriteFrame(Frame.end(frame.id, None)))
+                await writer_queue.put(WriteFrame(Frame.end(request_id, None)))
 
             except Exception as e:
-                # Handler error - send ERR frame
                 err_frame = Frame.err(
-                    frame.id,
+                    request_id,
                     "HANDLER_ERROR",
                     str(e)
                 )
                 await writer_queue.put(WriteFrame(err_frame))
 
         except Exception as e:
-            # Protocol error - send ERR frame
             try:
                 err_frame = Frame.err(
-                    frame.id,
+                    request_id,
                     "PROTOCOL_ERROR",
                     str(e)
                 )
                 await writer_queue.put(WriteFrame(err_frame))
             except:
-                pass  # Best effort
+                pass
 
     async def shutdown(self):
         """Shutdown the host and clean up resources"""

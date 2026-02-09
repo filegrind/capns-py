@@ -244,57 +244,56 @@ class PeerInvokerImpl:
     def invoke(self, cap_urn: str, arguments: List[CapArgumentValue]) -> Any:
         """Invoke a cap on the host with arguments.
 
-        Sends a REQ frame to the host with the specified cap URN and arguments.
-        Arguments are serialized as CBOR with native binary values.
+        Protocol v2: Sends REQ(empty) + STREAM_START + CHUNK(s) + STREAM_END + END
+        for each argument as an independent stream.
         Returns an iterator that yields response chunks (bytes) or raises errors.
-
-        The iterator will block waiting for responses until the host sends END or ERR.
         """
-        # Generate a new message ID for this request
+        import uuid as _uuid
+
         request_id = MessageId.new_uuid()
         request_id_str = request_id.to_string()
 
-        # Create a pending request tracker
         pending_req = PendingPeerRequest()
 
-        # Register the pending request before sending
         with self.pending_lock:
             self.pending_requests[request_id_str] = pending_req
 
-        # Serialize arguments as CBOR - binary values stay binary (no base64 needed)
-        try:
-            cbor_args = [
-                {
-                    "media_urn": arg.media_urn,
-                    "value": arg.value
-                }
-                for arg in arguments
-            ]
-            payload_bytes = cbor2.dumps(cbor_args)
-        except Exception as e:
-            # Remove the pending request on serialization failure
-            with self.pending_lock:
-                del self.pending_requests[request_id_str]
-            raise SerializeError(f"Failed to serialize arguments: {e}")
-
-        # Create and send the REQ frame with CBOR payload
-        frame = Frame.req(
-            request_id,
-            cap_urn,
-            payload_bytes,
-            "application/cbor"
-        )
+        max_chunk = self.max_chunk
 
         try:
             with self.writer_lock:
-                self.writer.write(frame)
+                # 1. REQ with empty payload
+                req_frame = Frame.req(request_id, cap_urn, b"", "application/cbor")
+                self.writer.write(req_frame)
+
+                # 2. Each argument as an independent stream
+                for arg in arguments:
+                    stream_id = str(_uuid.uuid4())
+
+                    # STREAM_START
+                    self.writer.write(Frame.stream_start(request_id, stream_id, arg.media_urn))
+
+                    # CHUNK(s)
+                    offset = 0
+                    seq = 0
+                    while offset < len(arg.value):
+                        chunk_size = min(len(arg.value) - offset, max_chunk)
+                        chunk_data = arg.value[offset:offset + chunk_size]
+                        self.writer.write(Frame.chunk(request_id, stream_id, seq, chunk_data))
+                        offset += chunk_size
+                        seq += 1
+
+                    # STREAM_END
+                    self.writer.write(Frame.stream_end(request_id, stream_id))
+
+                # 3. END
+                self.writer.write(Frame.end(request_id, None))
+
         except Exception as e:
-            # Remove the pending request on send failure
             with self.pending_lock:
                 del self.pending_requests[request_id_str]
-            raise PeerRequestError(f"Failed to send REQ frame: {e}")
+            raise PeerRequestError(f"Failed to send peer request frames: {e}")
 
-        # Return an iterator that yields response chunks
         return self._response_iterator(request_id_str, pending_req)
 
     def _response_iterator(self, request_id_str: str, pending_req: PendingPeerRequest):
