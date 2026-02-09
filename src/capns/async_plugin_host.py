@@ -254,6 +254,54 @@ class PluginResponse:
         return bytes(result)
 
 
+def cbor_decode_response(response: PluginResponse) -> PluginResponse:
+    """CBOR-decode the raw payload from a PluginResponse.
+
+    Plugin emitters CBOR-encode each emission as a CBOR byte string.
+    This function decodes the concatenated CBOR values and returns a new
+    PluginResponse with decoded payloads. This is the equivalent of
+    decode_cbor_values() in the Rust/Go/Swift test host binaries.
+
+    Raises on malformed CBOR — no silent fallbacks.
+    """
+    raw = response.concatenated()
+    if not raw:
+        return PluginResponse.single(b"")
+
+    import json as _json
+
+    decoded_chunks = []
+    stream = io.BytesIO(raw)
+    seq = 0
+    while stream.tell() < len(raw):
+        value = cbor2.CBORDecoder(stream).decode()
+        if isinstance(value, bytes):
+            payload = value
+        elif isinstance(value, str):
+            payload = value.encode("utf-8")
+        elif isinstance(value, (int, float, bool, list, dict)):
+            payload = _json.dumps(value).encode("utf-8")
+        elif value is None:
+            payload = b"null"
+        else:
+            raise ValueError(
+                f"Cannot decode CBOR value of type {type(value).__name__} to bytes"
+            )
+        decoded_chunks.append(ResponseChunk(
+            payload=payload, seq=seq, offset=None, len=None, is_eof=False
+        ))
+        seq += 1
+
+    if not decoded_chunks:
+        raise ValueError("No CBOR values found in response payload")
+
+    decoded_chunks[-1].is_eof = True
+
+    if len(decoded_chunks) == 1:
+        return PluginResponse.single(decoded_chunks[0].payload)
+    return PluginResponse.streaming(decoded_chunks)
+
+
 class StreamingResponse:
     """A streaming response from a plugin that can be iterated asynchronously"""
 
@@ -780,9 +828,9 @@ class AsyncPluginHost:
     async def _collect_response(queue: asyncio.Queue) -> PluginResponse:
         """Collect all response chunks from a queue into a PluginResponse.
 
-        Protocol v2: Data arrives in CHUNK frames (is_eof=False), END frame
-        terminates with is_eof=True and empty payload. We concatenate all
-        chunk payloads into a single response.
+        Returns raw chunk payloads as-is (CBOR-encoded from the plugin emitter).
+        This matches the Rust AsyncPluginHost behavior exactly — the library does
+        NOT CBOR-decode. Callers that need decoded data use cbor_decode_response().
         """
         chunks = []
 
@@ -801,49 +849,10 @@ class AsyncPluginHost:
         if not chunks:
             raise RecvError()
 
-        # Protocol v2: Concatenate all chunk payloads, then CBOR-decode.
-        # Plugin emitters CBOR-encode each emission as a CBOR value.
-        # Multiple emissions produce multiple CBOR values concatenated.
-        all_data = bytearray()
-        for c in chunks:
-            if c.payload:
-                all_data.extend(c.payload)
-
-        raw = bytes(all_data)
-        if not raw:
-            return PluginResponse.single(b"")
-
-        # Decode all CBOR values from concatenated stream
-        decoded_chunks = []
-        decoder = cbor2.CBORDecoder(io.BytesIO(raw))
-        seq = 0
-        while True:
-            try:
-                value = decoder.decode()
-                if isinstance(value, bytes):
-                    payload = value
-                elif isinstance(value, str):
-                    payload = value.encode("utf-8")
-                else:
-                    import json
-                    payload = json.dumps(value).encode("utf-8")
-                decoded_chunks.append(ResponseChunk(
-                    payload=payload, seq=seq, offset=None, len=None, is_eof=False
-                ))
-                seq += 1
-            except Exception:
-                break
-
-        if not decoded_chunks:
-            return PluginResponse.single(b"")
-
-        # Mark last chunk as EOF
-        decoded_chunks[-1].is_eof = True
-
-        if len(decoded_chunks) == 1:
-            return PluginResponse.single(decoded_chunks[0].payload)
+        if len(chunks) == 1 and chunks[0].seq == 0:
+            return PluginResponse.single(chunks[0].payload)
         else:
-            return PluginResponse.streaming(decoded_chunks)
+            return PluginResponse.streaming(chunks)
 
     def get_limits(self) -> Limits:
         """Get the negotiated protocol limits"""
