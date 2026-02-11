@@ -951,14 +951,22 @@ class PluginRuntime:
                                 pass
                         continue
 
-                    # Clone what we need for the handler thread
-                    request_id = frame.id
-                    streams_snapshot = list(pending_req.streams)
-                    cap_urn_clone = pending_req.cap_urn
-                    max_chunk = self.limits.max_chunk
+                    # Bind values for handler thread (default args capture by value,
+                    # not by reference — avoids closure-in-a-loop bug where the
+                    # loop reassigns these variables before the thread starts).
+                    _request_id = frame.id
+                    _streams_snapshot = list(pending_req.streams)
+                    _cap_urn = pending_req.cap_urn
+                    _handler = handler
+                    _max_chunk = self.limits.max_chunk
 
-                    # Spawn thread to invoke handler with stream multiplexing response
-                    def handle_streamed_request():
+                    def handle_streamed_request(
+                        request_id=_request_id,
+                        streams_snapshot=_streams_snapshot,
+                        cap_urn_clone=_cap_urn,
+                        handler=_handler,
+                        max_chunk=_max_chunk,
+                    ):
                         import uuid as _uuid
                         response_stream_id = f"resp-{_uuid.uuid4().hex[:8]}"
                         emitter = ThreadSafeEmitter(writer, request_id, response_stream_id, "media:bytes", writer_lock, max_chunk)
