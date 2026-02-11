@@ -714,3 +714,37 @@ def test_stream_end_roundtrip():
     assert decoded.id == id
     assert decoded.stream_id == "stream-xyz-789"
     assert decoded.media_urn is None, "StreamEnd should not have media_urn"
+
+
+# TEST399a: RelayNotify encode/decode roundtrip preserves manifest and limits
+def test_relay_notify_roundtrip():
+    manifest = b'{"caps":["cap:op=relay-test"]}'
+    max_frame = 2_000_000
+    max_chunk = 128_000
+
+    frame = Frame.relay_notify(manifest, max_frame, max_chunk)
+    encoded = encode_frame(frame)
+    decoded = decode_frame(encoded)
+
+    assert decoded.frame_type == FrameType.RELAY_NOTIFY
+
+    extracted_manifest = decoded.relay_notify_manifest()
+    assert extracted_manifest is not None, "relay_notify_manifest() must not be None after roundtrip"
+    assert extracted_manifest == manifest
+
+    extracted_limits = decoded.relay_notify_limits()
+    assert extracted_limits is not None, "relay_notify_limits() must not be None after roundtrip"
+    assert extracted_limits.max_frame == max_frame
+    assert extracted_limits.max_chunk == max_chunk
+
+
+# TEST400a: RelayState encode/decode roundtrip preserves resource payload
+def test_relay_state_roundtrip():
+    resources = b'{"gpu_memory":8192,"cpu_cores":16}'
+
+    frame = Frame.relay_state(resources)
+    encoded = encode_frame(frame)
+    decoded = decode_frame(encoded)
+
+    assert decoded.frame_type == FrameType.RELAY_STATE
+    assert decoded.payload == resources

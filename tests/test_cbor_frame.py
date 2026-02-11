@@ -394,3 +394,117 @@ def test_req_frame_empty_payload():
     """Test REQ frame with empty payload"""
     frame = Frame.req(MessageId.new_uuid(), "cap:op=test", b"", "text/plain")
     assert frame.payload == b"", "empty payload is still bytes, not None"
+
+
+# TEST365: Frame::stream_start stores req_id, stream_id, media_urn
+def test_stream_start_frame():
+    """Test STREAM_START frame stores all fields"""
+    req_id = MessageId.new_uuid()
+    stream_id = "stream-abc-123"
+    media_urn = "media:bytes"
+
+    frame = Frame.stream_start(req_id, stream_id, media_urn)
+
+    assert frame.frame_type == FrameType.STREAM_START
+    assert frame.stream_id == stream_id
+    assert frame.media_urn == media_urn
+    assert frame.id == req_id
+
+
+# TEST366: Frame::stream_end stores req_id, stream_id
+def test_stream_end_frame():
+    """Test STREAM_END frame stores req_id and stream_id"""
+    req_id = MessageId.new_uuid()
+    stream_id = "stream-xyz-456"
+
+    frame = Frame.stream_end(req_id, stream_id)
+
+    assert frame.frame_type == FrameType.STREAM_END
+    assert frame.stream_id == stream_id
+    assert frame.media_urn is None, "STREAM_END should not have media_urn"
+    assert frame.id == req_id
+
+
+# TEST367: Frame::stream_start with empty stream_id still constructs
+def test_stream_start_with_empty_stream_id():
+    """Test STREAM_START with empty stream_id"""
+    req_id = MessageId.new_uuid()
+    frame = Frame.stream_start(req_id, "", "media:json")
+
+    assert frame.frame_type == FrameType.STREAM_START
+    assert frame.stream_id == ""
+    assert frame.media_urn == "media:json"
+
+
+# TEST368: Frame::stream_start with empty media_urn still constructs
+def test_stream_start_with_empty_media_urn():
+    """Test STREAM_START with empty media_urn"""
+    req_id = MessageId.new_uuid()
+    frame = Frame.stream_start(req_id, "stream-test", "")
+
+    assert frame.frame_type == FrameType.STREAM_START
+    assert frame.stream_id == "stream-test"
+    assert frame.media_urn == ""
+
+
+# TEST399: RelayNotify discriminant roundtrips through u8 conversion (value 10)
+def test_relay_notify_discriminant_roundtrip():
+    """Test RelayNotify discriminant value is 10 and roundtrips"""
+    ft = FrameType.RELAY_NOTIFY
+    assert int(ft) == 10
+    recovered = FrameType.from_u8(10)
+    assert recovered == FrameType.RELAY_NOTIFY
+
+
+# TEST400: RelayState discriminant roundtrips through u8 conversion (value 11)
+def test_relay_state_discriminant_roundtrip():
+    """Test RelayState discriminant value is 11 and roundtrips"""
+    ft = FrameType.RELAY_STATE
+    assert int(ft) == 11
+    recovered = FrameType.from_u8(11)
+    assert recovered == FrameType.RELAY_STATE
+
+
+# TEST401: relay_notify factory stores manifest and limits, accessors extract them correctly
+def test_relay_notify_factory_and_accessors():
+    """Test relay_notify factory and accessor methods"""
+    manifest = b'{"caps":["cap:op=test"]}'
+    max_frame = 2_000_000
+    max_chunk = 128_000
+
+    frame = Frame.relay_notify(manifest, max_frame, max_chunk)
+
+    assert frame.frame_type == FrameType.RELAY_NOTIFY
+
+    # Test manifest accessor
+    extracted_manifest = frame.relay_notify_manifest()
+    assert extracted_manifest is not None, "relay_notify_manifest() must not be None"
+    assert extracted_manifest == manifest
+
+    # Test limits accessor
+    extracted_limits = frame.relay_notify_limits()
+    assert extracted_limits is not None, "relay_notify_limits() must not be None"
+    assert extracted_limits.max_frame == max_frame
+    assert extracted_limits.max_chunk == max_chunk
+
+    # Test accessors on wrong frame type return None
+    req = Frame.req(MessageId.new_uuid(), "cap:op=test", b"", "text/plain")
+    assert req.relay_notify_manifest() is None
+    assert req.relay_notify_limits() is None
+
+
+# TEST402: relay_state factory stores resource payload in payload field
+def test_relay_state_factory_and_payload():
+    """Test relay_state factory stores resources in payload"""
+    resources = b'{"gpu_memory":8192}'
+
+    frame = Frame.relay_state(resources)
+
+    assert frame.frame_type == FrameType.RELAY_STATE
+    assert frame.payload == resources
+
+
+# TEST403: FrameType::from_u8(12) returns None (one past RelayState)
+def test_frame_type_one_past_relay_state():
+    """Test that value 12 is invalid (one past RelayState)"""
+    assert FrameType.from_u8(12) is None, "value 12 is one past RelayState"

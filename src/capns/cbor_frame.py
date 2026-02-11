@@ -407,6 +407,33 @@ class Frame:
         frame.payload = resources
         return frame
 
+    def relay_notify_manifest(self) -> Optional[bytes]:
+        """Extract manifest from RelayNotify metadata.
+        Returns None if not a RelayNotify frame or no manifest present."""
+        if self.frame_type != FrameType.RELAY_NOTIFY:
+            return None
+        if self.meta is None:
+            return None
+        manifest = self.meta.get("manifest")
+        if isinstance(manifest, bytes):
+            return manifest
+        return None
+
+    def relay_notify_limits(self) -> Optional["Limits"]:
+        """Extract limits from RelayNotify metadata.
+        Returns None if not a RelayNotify frame or limits are missing."""
+        if self.frame_type != FrameType.RELAY_NOTIFY:
+            return None
+        if self.meta is None:
+            return None
+        max_frame = self.meta.get("max_frame")
+        max_chunk = self.meta.get("max_chunk")
+        if not isinstance(max_frame, int) or not isinstance(max_chunk, int):
+            return None
+        if max_frame <= 0 or max_chunk <= 0:
+            return None
+        return Limits(max_frame=max_frame, max_chunk=max_chunk)
+
     def is_eof(self) -> bool:
         """Check if this is the final frame in a stream"""
         return self.eof is True
