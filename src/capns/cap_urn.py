@@ -307,51 +307,7 @@ class CapUrn:
 
     def is_more_specific_than(self, other: "CapUrn") -> bool:
         """Check if this cap is more specific than another"""
-        # First check if they're compatible
-        if not self.is_compatible_with(other):
-            return False
-
         return self.specificity() > other.specificity()
-
-    def is_compatible_with(self, other: "CapUrn") -> bool:
-        """Check if this cap is compatible with another
-
-        Two caps are compatible if they can potentially match
-        the same types of requests (considering wildcards and missing tags as wildcards).
-        Direction specs are compatible if either conforms to the other via TaggedUrn matching.
-        """
-        # Check in_urn compatibility: either direction of conforms_to succeeds
-        if self.in_urn != "*" and other.in_urn != "*":
-            self_in = MediaUrn.from_string(self.in_urn)
-            other_in = MediaUrn.from_string(other.in_urn)
-            fwd = self_in.conforms_to(other_in)
-            rev = other_in.conforms_to(self_in)
-            if not fwd and not rev:
-                return False
-
-        # Check out_urn compatibility
-        if self.out_urn != "*" and other.out_urn != "*":
-            self_out = MediaUrn.from_string(self.out_urn)
-            other_out = MediaUrn.from_string(other.out_urn)
-            fwd = self_out.conforms_to(other_out)
-            rev = other_out.conforms_to(self_out)
-            if not fwd and not rev:
-                return False
-
-        # Get all unique tag keys from both caps
-        all_keys = set(self.tags.keys()) | set(other.tags.keys())
-
-        for key in all_keys:
-            v1 = self.tags.get(key)
-            v2 = other.tags.get(key)
-
-            if v1 is not None and v2 is not None:
-                # Both have the tag - they must match or one must be wildcard
-                if v1 != "*" and v2 != "*" and v1 != v2:
-                    return False
-            # else: One or both missing - missing tag is wildcard, so compatible
-
-        return True
 
     def with_wildcard_tag(self, key: str) -> "CapUrn":
         """Create a wildcard version by replacing specific values with wildcards

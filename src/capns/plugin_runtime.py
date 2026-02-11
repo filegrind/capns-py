@@ -54,7 +54,7 @@ from dataclasses import dataclass
 import cbor2
 
 from .cbor_frame import Frame, FrameType, Limits, MessageId, DEFAULT_MAX_FRAME, DEFAULT_MAX_CHUNK
-from .cbor_io import handshake_accept, FrameReader, FrameWriter, CborError
+from .cbor_io import handshake_accept, FrameReader, FrameWriter, CborError, ProtocolError
 from .caller import CapArgumentValue
 from .cap import ArgSource, Cap, CapArg, CliFlagSource
 from .cap_urn import CapUrn
@@ -1123,6 +1123,13 @@ class PluginRuntime:
             elif frame.frame_type == FrameType.LOG:
                 # Log frames from host - shouldn't normally receive these, ignore
                 continue
+
+            elif frame.frame_type in (FrameType.RELAY_NOTIFY, FrameType.RELAY_STATE):
+                # Relay-level frames must never reach a plugin runtime.
+                # If they do, it's a bug in the relay layer — fail hard.
+                raise ProtocolError(
+                    f"Relay frame {frame.frame_type} must not reach plugin runtime"
+                )
 
         # Wait for all active handlers to complete before exiting
         for thread in active_handlers:

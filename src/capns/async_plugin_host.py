@@ -1,53 +1,52 @@
-"""Async Plugin Host - Native async runtime for communicating with plugin processes
+"""Multi-Plugin Host — Manages N plugin binaries with cap-based routing.
 
-The AsyncPluginHost is the host-side runtime that manages all communication with
-a running plugin process using fully async I/O. It handles:
+The PluginHost is the host-side runtime that manages all communication with
+plugin processes. It handles:
 
+- Plugin registration for on-demand spawning
+- Plugin attachment for pre-connected plugins
 - HELLO handshake and limit negotiation
-- Sending cap requests
-- Receiving and routing responses
-- Heartbeat handling (transparent)
-- Multiplexed concurrent requests (transparent)
-- Clean cancellation and shutdown
+- Cap-based request routing (REQ → correct plugin)
+- Request continuation routing (STREAM_START/CHUNK/STREAM_END/END → by req_id)
+- Heartbeat handling (local, not forwarded)
+- Plugin death detection with pending request ERR
+- Aggregate capability advertisement
 
-**This is the ONLY way for the host to communicate with plugins.**
-No fallbacks, no alternative protocols.
+This matches the Rust AsyncPluginHost and Go PluginHost architectures exactly.
 
 Usage:
 ```python
-import asyncio
-from capns.async_plugin_host import AsyncPluginHost
+from capns.async_plugin_host import PluginHost
 
-async def main():
-    process = await asyncio.create_subprocess_exec(
-        "./my-plugin",
-        stdin=asyncio.subprocess.PIPE,
-        stdout=asyncio.subprocess.PIPE
-    )
-
-    host = await AsyncPluginHost.new(process.stdout, process.stdin)
-
-    # Send request and receive response
-    from capns.caller import CapArgumentValue
-    args = [CapArgumentValue("media:bytes", b"payload")]
-    response = await host.call_with_arguments("cap:op=test", args)
+host = PluginHost()
+host.register_plugin("/path/to/plugin", ["cap:op=convert"])
+host.run(relay_reader, relay_writer, resource_fn=lambda: b"")
 ```
 """
 
-import asyncio
-from typing import Optional, List, Dict
+import json
+import subprocess
+import threading
+import queue
+from typing import Optional, List, Callable
 from dataclasses import dataclass
 
-import io
-import cbor2
-from capns.cbor_frame import Frame, FrameType, Limits, MessageId
-from capns.cbor_io import handshake_async, AsyncFrameReader, AsyncFrameWriter, CborError
-from capns.caller import CapArgumentValue
+from capns.cbor_frame import Frame, FrameType, Limits
+from capns.cbor_io import (
+    FrameReader,
+    FrameWriter,
+    handshake,
+    CborError,
+)
 from capns.cap_urn import CapUrn, CapUrnError
 
 
+# =========================================================================
+# Error types
+# =========================================================================
+
 class AsyncHostError(Exception):
-    """Base error for async plugin host"""
+    """Base error for plugin host"""
 
     def __init__(self, message: str):
         super().__init__(message)
@@ -114,92 +113,14 @@ class RecvError(AsyncHostError):
         super().__init__("Receive error: channel closed")
 
 
-class ChunkMissingStreamId(AsyncHostError):
-    """CHUNK frame missing stream_id (Protocol v2 violation)"""
-
-    def __init__(self):
-        super().__init__("CHUNK frame missing stream_id")
-
-
-class StreamAfterRequestEnd(AsyncHostError):
-    """Stream activity after END frame (Protocol v2 violation)"""
-
-    def __init__(self):
-        super().__init__("Stream activity after request END")
-
-
-class ChunkAfterStreamEnd(AsyncHostError):
-    """CHUNK for stream that already ended (Protocol v2 violation)"""
-
-    def __init__(self, stream_id: str):
-        super().__init__(f"CHUNK for ended stream: {stream_id}")
-        self.stream_id = stream_id
-
-
-class UnknownStreamId(AsyncHostError):
-    """CHUNK for unknown stream_id (Protocol v2 violation)"""
-
-    def __init__(self, stream_id: str):
-        super().__init__(f"Unknown stream_id: {stream_id}")
-        self.stream_id = stream_id
-
-
-class StreamStartMissingId(AsyncHostError):
-    """STREAM_START missing stream_id (Protocol v2 violation)"""
-
-    def __init__(self):
-        super().__init__("STREAM_START missing stream_id")
-
-
-class StreamStartMissingUrn(AsyncHostError):
-    """STREAM_START missing media_urn (Protocol v2 violation)"""
-
-    def __init__(self):
-        super().__init__("STREAM_START missing media_urn")
-
-
-class DuplicateStreamId(AsyncHostError):
-    """Duplicate stream_id in STREAM_START (Protocol v2 violation)"""
-
-    def __init__(self, stream_id: str):
-        super().__init__(f"Duplicate stream_id: {stream_id}")
-        self.stream_id = stream_id
-
-
 class Protocol(AsyncHostError):
     """Generic protocol violation"""
     pass
 
 
-@dataclass
-class StreamState:
-    """Stream state tracking for Protocol v2 multiplexing"""
-    media_urn: str
-    active: bool
-
-
-@dataclass
-class PeerIncomingStream:
-    """Stream state for an incoming peer request (plugin → host)"""
-    media_urn: str
-    chunks: list  # List[bytes]
-    complete: bool
-
-
-@dataclass
-class PeerIncomingRequest:
-    """Tracking for incoming peer requests using Protocol v2 stream multiplexing.
-
-    When a plugin calls a host capability via PeerInvoker, it sends:
-    REQ(empty) + STREAM_START + CHUNK(s) + STREAM_END + END
-
-    We accumulate the stream data here before dispatching to the handler.
-    """
-    cap_urn: str
-    content_type: Optional[str]
-    streams: list  # List[tuple[str, PeerIncomingStream]] - ordered
-    ended: bool
-
+# =========================================================================
+# Response types (used by test harnesses and interop)
+# =========================================================================
 
 @dataclass
 class ResponseChunk:
@@ -259,16 +180,16 @@ def cbor_decode_response(response: PluginResponse) -> PluginResponse:
 
     Plugin emitters CBOR-encode each emission as a CBOR byte string.
     This function decodes the concatenated CBOR values and returns a new
-    PluginResponse with decoded payloads. This is the equivalent of
-    decode_cbor_values() in the Rust/Go/Swift test host binaries.
+    PluginResponse with decoded payloads.
 
     Raises on malformed CBOR — no silent fallbacks.
     """
+    import io
+    import cbor2
+
     raw = response.concatenated()
     if not raw:
         return PluginResponse.single(b"")
-
-    import json as _json
 
     decoded_chunks = []
     stream = io.BytesIO(raw)
@@ -280,7 +201,7 @@ def cbor_decode_response(response: PluginResponse) -> PluginResponse:
         elif isinstance(value, str):
             payload = value.encode("utf-8")
         elif isinstance(value, (int, float, bool, list, dict)):
-            payload = _json.dumps(value).encode("utf-8")
+            payload = json.dumps(value).encode("utf-8")
         elif value is None:
             payload = b"null"
         else:
@@ -302,753 +223,533 @@ def cbor_decode_response(response: PluginResponse) -> PluginResponse:
     return PluginResponse.streaming(decoded_chunks)
 
 
-class StreamingResponse:
-    """A streaming response from a plugin that can be iterated asynchronously"""
+# =========================================================================
+# Internal types
+# =========================================================================
 
-    def __init__(self, queue: asyncio.Queue):
-        self.queue = queue
-
-    async def next(self) -> Optional[ResponseChunk]:
-        """Get the next chunk from the stream"""
-        try:
-            item = await self.queue.get()
-            if isinstance(item, Exception):
-                raise item
-            return item
-        except asyncio.QueueEmpty:
-            return None
-
-
-class WriterCommand:
-    """Commands sent to the writer task"""
-    pass
+@dataclass
+class _PluginEvent:
+    """Internal event from a plugin reader thread."""
+    plugin_idx: int
+    frame: Optional[Frame]  # None = death
+    is_death: bool
 
 
 @dataclass
-class WriteFrame(WriterCommand):
-    """Write a frame"""
-    frame: Frame
+class _CapTableEntry:
+    """Maps a cap URN to a plugin index."""
+    cap_urn: str
+    plugin_idx: int
 
 
 @dataclass
-class Shutdown(WriterCommand):
-    """Shutdown the writer"""
-    pass
+class _RoutingEntry:
+    """Tracks a routed request with its original MessageId."""
+    plugin_idx: int
+    msg_id: object  # MessageId
 
 
-@dataclass
-class RequestState:
-    """Per-request state tracking (Protocol v2 stream multiplexing)"""
-    queue: asyncio.Queue
-    streams: List[tuple[str, StreamState]]  # (stream_id, state) - ordered
-    ended: bool
+class _ManagedPlugin:
+    """A plugin managed by the PluginHost."""
+
+    def __init__(self, path: str = "", known_caps: Optional[List[str]] = None):
+        self.path = path
+        self.process: Optional[subprocess.Popen] = None
+        self.writer: Optional[FrameWriter] = None
+        self.writer_queue: Optional[queue.Queue] = None
+        self.manifest: bytes = b""
+        self.limits: Limits = Limits.default()
+        self.caps: List[str] = []
+        self.known_caps: List[str] = known_caps or []
+        self.running: bool = False
+        self.hello_failed: bool = False
 
 
-class HostState:
-    """Internal shared state for the async plugin host"""
+# =========================================================================
+# PluginHost — multi-plugin relay-based host
+# =========================================================================
 
-    def __init__(self, limits: Limits = None):
-        self.pending: Dict[MessageId, RequestState] = {}
-        self.peer_incoming: Dict[MessageId, PeerIncomingRequest] = {}
-        self.pending_heartbeats: set = set()
-        self.closed: bool = False
-        self.capabilities: Dict[str, callable] = {}  # cap_urn -> async handler function
-        self.limits: Limits = limits or Limits.default()
+class PluginHost:
+    """Manages N plugin binaries with cap-based routing.
 
+    Plugins are either registered (for on-demand spawning) or attached
+    (pre-connected). REQ frames from the relay are routed to the correct
+    plugin by cap URN. Continuation frames (STREAM_START, CHUNK,
+    STREAM_END, END) are routed by request ID.
 
-class AsyncPluginHost:
-    """Async host-side runtime for communicating with a plugin process
-
-    Uses native asyncio async I/O with clean cancellation support.
+    Matches the Rust AsyncPluginHost and Go PluginHost architectures.
     """
 
-    def __init__(
-        self,
-        writer_queue: asyncio.Queue,
-        state: HostState,
-        limits: Limits,
-        plugin_manifest: bytes,
-        reader_task: asyncio.Task,
-        writer_task: asyncio.Task,
-    ):
-        """Internal constructor - use new() instead"""
-        self._writer_queue = writer_queue
-        self._state = state
-        self.limits = limits
-        self.plugin_manifest = plugin_manifest
-        self.reader_task = reader_task
-        self.writer_task = writer_task
+    def __init__(self):
+        self._plugins: List[_ManagedPlugin] = []
+        self._cap_table: List[_CapTableEntry] = []
+        self._request_routing: dict = {}  # req_id_str → _RoutingEntry
+        self._peer_requests: dict = {}  # req_id_str → True (plugin-initiated)
+        self._capabilities: Optional[bytes] = None
+        self._event_queue: queue.Queue = queue.Queue(maxsize=256)
+        self._lock = threading.Lock()
 
-    @classmethod
-    async def new(cls, stdout, stdin) -> "AsyncPluginHost":
-        """Create a new async plugin host and perform handshake
+    def register_plugin(self, path: str, known_caps: List[str]) -> None:
+        """Register a plugin binary for on-demand spawning.
 
-        This sends a HELLO frame, waits for the plugin's HELLO (which MUST include manifest),
-        negotiates protocol limits, then starts the background reader and writer tasks.
+        The plugin is not spawned until a REQ arrives for one of its known caps.
 
         Args:
-            stdout: Plugin stdout stream for reading
-            stdin: Plugin stdin stream for writing
+            path: Path to the plugin binary
+            known_caps: List of cap URNs this plugin is expected to handle
+        """
+        with self._lock:
+            plugin_idx = len(self._plugins)
+            self._plugins.append(_ManagedPlugin(path=path, known_caps=known_caps))
+
+            for cap in known_caps:
+                self._cap_table.append(_CapTableEntry(cap_urn=cap, plugin_idx=plugin_idx))
+
+    def attach_plugin(self, plugin_stdout, plugin_stdin) -> int:
+        """Attach a pre-connected plugin (already running).
+
+        Performs HELLO handshake immediately and returns the plugin index.
+
+        Args:
+            plugin_stdout: Plugin's stdout stream (host reads from this)
+            plugin_stdin: Plugin's stdin stream (host writes to this)
 
         Returns:
-            AsyncPluginHost instance
+            Plugin index
 
         Raises:
             AsyncHostError: If handshake fails
         """
-        reader = AsyncFrameReader(stdout)
-        writer = AsyncFrameWriter(stdin)
+        reader = FrameReader(plugin_stdout)
+        writer = FrameWriter(plugin_stdin)
 
-        # Perform handshake
-        handshake_result = await handshake_async(reader, writer)
-        limits = handshake_result.limits
-        plugin_manifest = handshake_result.manifest
-
-        # Create queues and state
-        writer_queue = asyncio.Queue(maxsize=64)
-        state = HostState(limits=limits)
-
-        # Start writer task
-        writer_task = asyncio.create_task(cls._writer_loop(writer, writer_queue))
-
-        # Start reader task
-        reader_task = asyncio.create_task(
-            cls._reader_loop(reader, state, writer_queue)
-        )
-
-        return cls(writer_queue, state, limits, plugin_manifest, reader_task, writer_task)
-
-    @staticmethod
-    async def _writer_loop(writer: AsyncFrameWriter, queue: asyncio.Queue):
-        """Writer loop - sends frames from the queue"""
-        while True:
-            cmd = await queue.get()
-            if isinstance(cmd, Shutdown):
-                break
-            elif isinstance(cmd, WriteFrame):
-                try:
-                    await writer.write(cmd.frame)
-                except Exception as e:
-                    print(f"AsyncPluginHost writer error: {e}")
-                    break
-
-    @staticmethod
-    async def _reader_loop(
-        reader: AsyncFrameReader,
-        state: HostState,
-        writer_queue: asyncio.Queue,
-    ):
-        """Reader loop - reads frames and dispatches to waiting requests"""
-        while True:
-            try:
-                frame = await reader.read()
-
-                if frame is None:
-                    # EOF - plugin closed
-                    state.closed = True
-                    # Notify all pending requests
-                    for req_state in state.pending.values():
-                        await req_state.queue.put(ProcessExited())
-                    break
-
-                # Handle heartbeats transparently
-                if frame.frame_type == FrameType.HEARTBEAT:
-                    if frame.id not in state.pending_heartbeats:
-                        # Respond to heartbeat from plugin
-                        response = Frame.heartbeat(frame.id)
-                        await writer_queue.put(WriteFrame(response))
-                    else:
-                        # Remove from pending heartbeats
-                        state.pending_heartbeats.discard(frame.id)
-                    continue
-
-                # Handle incoming REQ frames (peer invocations from plugin)
-                # Protocol v2: Plugin sends REQ(empty) + STREAM_START + CHUNK(s) + STREAM_END + END
-                if frame.frame_type == FrameType.REQ and frame.id not in state.pending:
-                    # Start accumulating peer request — handler dispatched on END
-                    state.peer_incoming[frame.id] = PeerIncomingRequest(
-                        cap_urn=frame.cap,
-                        content_type=frame.content_type,
-                        streams=[],
-                        ended=False,
-                    )
-                    continue
-
-                # Route frames for peer incoming requests (plugin → host)
-                if frame.id in state.peer_incoming:
-                    peer_req = state.peer_incoming[frame.id]
-
-                    if frame.frame_type == FrameType.STREAM_START:
-                        stream_id = frame.stream_id
-                        media_urn = frame.media_urn
-                        if stream_id is None:
-                            del state.peer_incoming[frame.id]
-                            err = Frame.err(frame.id, "PROTOCOL_ERROR", "STREAM_START missing stream_id")
-                            await writer_queue.put(WriteFrame(err))
-                            continue
-                        if media_urn is None:
-                            del state.peer_incoming[frame.id]
-                            err = Frame.err(frame.id, "PROTOCOL_ERROR", "STREAM_START missing media_urn")
-                            await writer_queue.put(WriteFrame(err))
-                            continue
-                        if peer_req.ended:
-                            del state.peer_incoming[frame.id]
-                            err = Frame.err(frame.id, "PROTOCOL_ERROR", "STREAM_START after END")
-                            await writer_queue.put(WriteFrame(err))
-                            continue
-                        if any(sid == stream_id for sid, _ in peer_req.streams):
-                            del state.peer_incoming[frame.id]
-                            err = Frame.err(frame.id, "PROTOCOL_ERROR", f"Duplicate stream_id: {stream_id}")
-                            await writer_queue.put(WriteFrame(err))
-                            continue
-                        peer_req.streams.append((stream_id, PeerIncomingStream(
-                            media_urn=media_urn, chunks=[], complete=False
-                        )))
-
-                    elif frame.frame_type == FrameType.CHUNK:
-                        stream_id = frame.stream_id
-                        if stream_id is None:
-                            del state.peer_incoming[frame.id]
-                            err = Frame.err(frame.id, "PROTOCOL_ERROR", "CHUNK missing stream_id")
-                            await writer_queue.put(WriteFrame(err))
-                            continue
-                        if peer_req.ended:
-                            del state.peer_incoming[frame.id]
-                            continue
-                        stream_found = None
-                        for sid, s in peer_req.streams:
-                            if sid == stream_id:
-                                stream_found = s
-                                break
-                        if stream_found is None:
-                            del state.peer_incoming[frame.id]
-                            err = Frame.err(frame.id, "PROTOCOL_ERROR", f"CHUNK for unknown stream_id={stream_id}")
-                            await writer_queue.put(WriteFrame(err))
-                            continue
-                        if stream_found.complete:
-                            del state.peer_incoming[frame.id]
-                            err = Frame.err(frame.id, "PROTOCOL_ERROR", f"CHUNK after STREAM_END for stream_id={stream_id}")
-                            await writer_queue.put(WriteFrame(err))
-                            continue
-                        if frame.payload:
-                            stream_found.chunks.append(frame.payload)
-
-                    elif frame.frame_type == FrameType.STREAM_END:
-                        stream_id = frame.stream_id
-                        if stream_id is None:
-                            del state.peer_incoming[frame.id]
-                            err = Frame.err(frame.id, "PROTOCOL_ERROR", "STREAM_END missing stream_id")
-                            await writer_queue.put(WriteFrame(err))
-                            continue
-                        for sid, s in peer_req.streams:
-                            if sid == stream_id:
-                                s.complete = True
-                                break
-
-                    elif frame.frame_type == FrameType.END:
-                        # Concatenate all stream chunks in order
-                        payload = bytearray()
-                        for _sid, s in peer_req.streams:
-                            for chunk in s.chunks:
-                                payload.extend(chunk)
-                        del state.peer_incoming[frame.id]
-                        # Dispatch handler with collected payload
-                        asyncio.create_task(
-                            AsyncPluginHost._handle_peer_request(
-                                frame.id, peer_req.cap_urn, bytes(payload),
-                                peer_req.content_type, state, writer_queue
-                            )
-                        )
-
-                    continue
-
-                # Route frame to appropriate pending request (host-initiated)
-                if frame.id in state.pending:
-                    req_state = state.pending[frame.id]
-                    should_remove = False
-
-                    if frame.frame_type == FrameType.CHUNK:
-                        # STRICT: Validate chunk has stream_id and stream is active (Protocol v2)
-                        try:
-                            stream_id = frame.stream_id
-                            if stream_id is None:
-                                await req_state.queue.put(ChunkMissingStreamId())
-                                should_remove = True
-                                continue
-
-                            # FAIL HARD: Request already ended
-                            if req_state.ended:
-                                await req_state.queue.put(StreamAfterRequestEnd())
-                                should_remove = True
-                                continue
-
-                            # FAIL HARD: Unknown or inactive stream
-                            stream_found = None
-                            for sid, stream_state in req_state.streams:
-                                if sid == stream_id:
-                                    stream_found = stream_state
-                                    break
-
-                            if stream_found is None:
-                                await req_state.queue.put(UnknownStreamId(stream_id))
-                                should_remove = True
-                                continue
-
-                            if not stream_found.active:
-                                await req_state.queue.put(ChunkAfterStreamEnd(stream_id))
-                                should_remove = True
-                                continue
-
-                            # ✅ Valid chunk for active stream
-                            is_eof = frame.is_eof()
-                            chunk = ResponseChunk(
-                                payload=frame.payload or b"",
-                                seq=frame.seq,
-                                offset=frame.offset,
-                                len=frame.len,
-                                is_eof=is_eof,
-                            )
-                            await req_state.queue.put(chunk)
-                            should_remove = is_eof
-                        except Exception as e:
-                            await req_state.queue.put(Protocol(f"CHUNK error: {e}"))
-                            should_remove = True
-
-                    elif frame.frame_type.value == 2:
-                        # RES frame removed in Protocol v2 — fail hard
-                        await req_state.queue.put(Protocol("RES frame (type 2) is not supported in Protocol v2. Use STREAM_START/CHUNK/STREAM_END/END."))
-                        should_remove = True
-
-                    elif frame.frame_type == FrameType.END:
-                        req_state.ended = True
-                        # Always send a terminal EOF chunk so _collect_response exits
-                        chunk = ResponseChunk(
-                            payload=frame.payload or b"",
-                            seq=frame.seq,
-                            offset=frame.offset,
-                            len=frame.len,
-                            is_eof=True,
-                        )
-                        await req_state.queue.put(chunk)
-                        should_remove = True
-
-                    elif frame.frame_type == FrameType.LOG:
-                        # LOG frames are transparent
-                        should_remove = False
-
-                    elif frame.frame_type == FrameType.ERR:
-                        code = frame.error_code() or "UNKNOWN"
-                        message = frame.error_message() or "Unknown error"
-                        await req_state.queue.put(PluginError(code, message))
-                        should_remove = True
-
-                    elif frame.frame_type == FrameType.STREAM_START:
-                        # STRICT: Track new stream, FAIL HARD on violations
-                        try:
-                            stream_id = frame.stream_id
-                            if stream_id is None:
-                                await req_state.queue.put(StreamStartMissingId())
-                                should_remove = True
-                                continue
-
-                            media_urn = frame.media_urn
-                            if media_urn is None:
-                                await req_state.queue.put(StreamStartMissingUrn())
-                                should_remove = True
-                                continue
-
-                            # FAIL HARD: Request already ended
-                            if req_state.ended:
-                                await req_state.queue.put(StreamAfterRequestEnd())
-                                should_remove = True
-                                continue
-
-                            # FAIL HARD: Duplicate stream ID
-                            if any(sid == stream_id for sid, _ in req_state.streams):
-                                await req_state.queue.put(DuplicateStreamId(stream_id))
-                                should_remove = True
-                                continue
-
-                            # ✅ Track new stream
-                            req_state.streams.append((stream_id, StreamState(media_urn=media_urn, active=True)))
-                            should_remove = False
-                        except Exception as e:
-                            await req_state.queue.put(Protocol(f"STREAM_START error: {e}"))
-                            should_remove = True
-
-                    elif frame.frame_type == FrameType.STREAM_END:
-                        # STRICT: Mark stream as ended, FAIL HARD on violations
-                        try:
-                            stream_id = frame.stream_id
-                            if stream_id is None:
-                                await req_state.queue.put(Protocol("STREAM_END missing stream_id"))
-                                should_remove = True
-                                continue
-
-                            # FAIL HARD: Unknown stream
-                            stream_found = False
-                            for i, (sid, stream_state) in enumerate(req_state.streams):
-                                if sid == stream_id:
-                                    req_state.streams[i] = (sid, StreamState(media_urn=stream_state.media_urn, active=False))
-                                    stream_found = True
-                                    break
-
-                            if not stream_found:
-                                await req_state.queue.put(UnknownStreamId(stream_id))
-                                should_remove = True
-                                continue
-
-                            should_remove = False
-                        except Exception as e:
-                            await req_state.queue.put(Protocol(f"STREAM_END error: {e}"))
-                            should_remove = True
-
-                    else:
-                        await req_state.queue.put(UnexpectedFrameType(frame.frame_type))
-                        should_remove = True
-
-                    # Remove completed request
-                    if should_remove:
-                        del state.pending[frame.id]
-
-            except Exception as e:
-                # Read error
-                state.closed = True
-                error = CborErrorWrapper(str(e))
-                for req_state in state.pending.values():
-                    await req_state.queue.put(error)
-                break
-
-    async def request_with_arguments(
-        self,
-        cap_urn: str,
-        arguments: list,
-    ) -> asyncio.Queue:
-        """Send a cap request with typed arguments and receive responses via a queue.
-
-        Each argument becomes an independent stream (STREAM_START + CHUNK(s) + STREAM_END).
-        This matches the Rust AsyncPluginHost.request_with_arguments() wire format exactly.
-
-        Args:
-            cap_urn: Cap URN to invoke
-            arguments: List of CapArgumentValue (media_urn + value bytes)
-
-        Returns:
-            Queue for receiving response chunks
-
-        Raises:
-            Closed: If host is closed
-            SendError: If send fails
-        """
-        if self._state.closed:
-            raise Closed()
-
-        import uuid as _uuid
-
-        request_id = MessageId.new_uuid()
-
-        queue = asyncio.Queue(maxsize=32)
-        self._state.pending[request_id] = RequestState(
-            queue=queue,
-            streams=[],
-            ended=False
-        )
-
-        max_chunk = self.limits.max_chunk
-
-        # REQ with empty payload — arguments come as streams
-        request = Frame.req(request_id, cap_urn, b"", "application/cbor")
         try:
-            await self._writer_queue.put(WriteFrame(request))
-        except:
-            raise SendError()
-
-        # Each argument becomes an independent stream
-        for arg in arguments:
-            stream_id = str(_uuid.uuid4())
-
-            # STREAM_START with the argument's media_urn
-            stream_start = Frame.stream_start(request_id, stream_id, arg.media_urn)
-            try:
-                await self._writer_queue.put(WriteFrame(stream_start))
-            except:
-                raise SendError()
-
-            # CHUNK(s)
-            offset = 0
-            seq = 0
-            while offset < len(arg.value):
-                chunk_size = min(len(arg.value) - offset, max_chunk)
-                chunk_data = arg.value[offset:offset + chunk_size]
-                chunk_frame = Frame.chunk(request_id, stream_id, seq, chunk_data)
-                try:
-                    await self._writer_queue.put(WriteFrame(chunk_frame))
-                except:
-                    raise SendError()
-                offset += chunk_size
-                seq += 1
-
-            # STREAM_END
-            stream_end = Frame.stream_end(request_id, stream_id)
-            try:
-                await self._writer_queue.put(WriteFrame(stream_end))
-            except:
-                raise SendError()
-
-        # END closes the entire request
-        end_frame = Frame.end(request_id, None)
-        try:
-            await self._writer_queue.put(WriteFrame(end_frame))
-        except:
-            raise SendError()
-
-        return queue
-
-    async def call_with_arguments(
-        self,
-        cap_urn: str,
-        arguments: list,
-    ) -> PluginResponse:
-        """Send a cap request with typed arguments and wait for the complete response.
-
-        Args:
-            cap_urn: Cap URN to invoke
-            arguments: List of CapArgumentValue (media_urn + value bytes)
-
-        Returns:
-            Complete PluginResponse
-
-        Raises:
-            AsyncHostError: If call fails
-        """
-        queue = await self.request_with_arguments(cap_urn, arguments)
-        return await self._collect_response(queue)
-
-    @staticmethod
-    async def _collect_response(queue: asyncio.Queue) -> PluginResponse:
-        """Collect all response chunks from a queue into a PluginResponse.
-
-        Returns raw chunk payloads as-is (CBOR-encoded from the plugin emitter).
-        This matches the Rust AsyncPluginHost behavior exactly — the library does
-        NOT CBOR-decode. Callers that need decoded data use cbor_decode_response().
-        """
-        chunks = []
-
-        while True:
-            item = await queue.get()
-
-            if isinstance(item, Exception):
-                raise item
-
-            chunk = item
-            chunks.append(chunk)
-
-            if chunk.is_eof:
-                break
-
-        if not chunks:
-            raise RecvError()
-
-        if len(chunks) == 1 and chunks[0].seq == 0:
-            return PluginResponse.single(chunks[0].payload)
-        else:
-            return PluginResponse.streaming(chunks)
-
-    def get_limits(self) -> Limits:
-        """Get the negotiated protocol limits"""
-        return self.limits
-
-    def get_plugin_manifest(self) -> bytes:
-        """Get the plugin manifest extracted from HELLO handshake"""
-        return self.plugin_manifest
-
-    async def call_streaming_with_arguments(
-        self,
-        cap_urn: str,
-        arguments: list,
-    ) -> StreamingResponse:
-        """Send a cap request with typed arguments and get a streaming response iterator.
-
-        Args:
-            cap_urn: Cap URN to invoke
-            arguments: List of CapArgumentValue (media_urn + value bytes)
-
-        Returns:
-            StreamingResponse for iterating chunks
-        """
-        queue = await self.request_with_arguments(cap_urn, arguments)
-        return StreamingResponse(queue)
-
-    async def send_heartbeat(self) -> None:
-        """Send a heartbeat and wait for response
-
-        Raises:
-            Closed: If host is closed
-            SendError: If send fails
-        """
-        if self._state.closed:
-            raise Closed()
-
-        heartbeat_id = MessageId.new_uuid()
-        heartbeat = Frame.heartbeat(heartbeat_id)
-
-        # Track this heartbeat
-        self._state.pending_heartbeats.add(heartbeat_id)
-
-        # Send heartbeat
-        try:
-            await self._writer_queue.put(WriteFrame(heartbeat))
-        except:
-            raise SendError()
-
-        # Wait for response (with timeout)
-        try:
-            await asyncio.wait_for(
-                self._wait_for_heartbeat_response(heartbeat_id),
-                timeout=5.0
-            )
-        except asyncio.TimeoutError:
-            self._state.pending_heartbeats.discard(heartbeat_id)
-            raise AsyncHostError("Heartbeat timeout")
-
-    async def _wait_for_heartbeat_response(self, heartbeat_id: MessageId):
-        """Wait for heartbeat response"""
-        while heartbeat_id in self._state.pending_heartbeats:
-            await asyncio.sleep(0.01)
-
-    def register_capability(self, cap_urn: str, handler):
-        """Register a host-side capability that the plugin can invoke via PeerInvoker.
-
-        Args:
-            cap_urn: Capability URN (wildcards supported in matching)
-            handler: Async function that takes (bytes) and returns bytes
-        """
-        self._state.capabilities[cap_urn] = handler
-
-    @staticmethod
-    async def _handle_peer_request(request_id, cap_urn, payload, content_type, state, writer_queue):
-        """Handle a peer invocation from the plugin after stream data is collected.
-
-        Protocol v2: The plugin sends REQ(empty) + STREAM_START + CHUNK(s) + STREAM_END + END.
-        By the time this is called, all stream data has been concatenated into `payload`.
-
-        Args:
-            request_id: MessageId from the original REQ frame
-            cap_urn: Capability URN being invoked
-            payload: Collected stream data (raw bytes)
-            content_type: Content type from the REQ frame
-            state: HostState with registered capabilities
-            writer_queue: Queue for sending response frames
-        """
-        try:
-            # Find matching handler
-            handler = None
-
-            # Parse requested cap URN - fail hard if malformed
-            try:
-                cap_urn_obj = CapUrn.from_string(cap_urn)
-            except CapUrnError as e:
-                err_frame = Frame.err(
-                    request_id,
-                    "INVALID_CAP_URN",
-                    f"Malformed cap URN in request: {cap_urn}: {e}"
-                )
-                await writer_queue.put(WriteFrame(err_frame))
-                return
-
-            cap_op = cap_urn_obj.get_tag("op")
-
-            for registered_urn, registered_handler in state.capabilities.items():
-                try:
-                    reg_urn_obj = CapUrn.from_string(registered_urn)
-                except CapUrnError as e:
-                    raise RuntimeError(f"Plugin has malformed registered cap URN: {registered_urn}: {e}")
-
-                reg_op = reg_urn_obj.get_tag("op")
-
-                if cap_op and reg_op and cap_op == reg_op:
-                    handler = registered_handler
-                    break
-
-            if handler is None:
-                err_frame = Frame.err(
-                    request_id,
-                    "NO_HANDLER",
-                    f"No handler registered for capability: {cap_urn}"
-                )
-                await writer_queue.put(WriteFrame(err_frame))
-                return
-
-            # Execute handler with the raw stream payload
-            try:
-                result = await handler(payload)
-
-                # Protocol v2: Send response using stream multiplexing
-                import uuid
-                peer_stream_id = str(uuid.uuid4())
-                peer_media_urn = content_type or "media:bytes"
-
-                # STREAM_START
-                await writer_queue.put(WriteFrame(Frame.stream_start(request_id, peer_stream_id, peer_media_urn)))
-
-                # Send raw result bytes (NOT CBOR-encoded).
-                # The Rust host sends chunk.payload directly — peer invokers
-                # in all languages expect raw bytes, not CBOR-wrapped values.
-                raw_result = result if result else b""
-
-                # CHUNK(s) with stream_id
-                if raw_result:
-                    max_chunk = state.limits.max_chunk
-                    offset = 0
-                    seq = 0
-                    while offset < len(raw_result):
-                        chunk_size = min(len(raw_result) - offset, max_chunk)
-                        chunk_data = raw_result[offset:offset + chunk_size]
-                        offset += chunk_size
-                        await writer_queue.put(WriteFrame(Frame.chunk(request_id, peer_stream_id, seq, chunk_data)))
-                        seq += 1
-
-                # STREAM_END
-                await writer_queue.put(WriteFrame(Frame.stream_end(request_id, peer_stream_id)))
-
-                # END
-                await writer_queue.put(WriteFrame(Frame.end(request_id, None)))
-
-            except Exception as e:
-                err_frame = Frame.err(
-                    request_id,
-                    "HANDLER_ERROR",
-                    str(e)
-                )
-                await writer_queue.put(WriteFrame(err_frame))
-
+            result = handshake(reader, writer)
         except Exception as e:
+            raise Handshake(f"handshake failed: {e}")
+
+        caps = _parse_caps_from_manifest(result.manifest)
+
+        with self._lock:
+            plugin_idx = len(self._plugins)
+
+            writer_q = queue.Queue(maxsize=64)
+            plugin = _ManagedPlugin()
+            plugin.writer = writer
+            plugin.writer_queue = writer_q
+            plugin.manifest = result.manifest
+            plugin.limits = result.limits
+            plugin.caps = caps
+            plugin.running = True
+
+            self._plugins.append(plugin)
+
+            for cap in caps:
+                self._cap_table.append(_CapTableEntry(cap_urn=cap, plugin_idx=plugin_idx))
+            self._rebuild_capabilities()
+
+        # Start reader and writer threads
+        threading.Thread(
+            target=self._writer_loop, args=(writer, writer_q),
+            daemon=True
+        ).start()
+        threading.Thread(
+            target=self._reader_loop, args=(plugin_idx, reader),
+            daemon=True
+        ).start()
+
+        return plugin_idx
+
+    def capabilities(self) -> Optional[bytes]:
+        """Return the aggregate capabilities of all running plugins as JSON."""
+        with self._lock:
+            return self._capabilities
+
+    def find_plugin_for_cap(self, cap_urn: str) -> Optional[int]:
+        """Find the plugin index that can handle a given cap URN.
+
+        Returns plugin index if found, None if not.
+        """
+        with self._lock:
+            return self._find_plugin_for_cap_locked(cap_urn)
+
+    def _find_plugin_for_cap_locked(self, cap_urn: str) -> Optional[int]:
+        """Find plugin for cap (caller must hold lock)."""
+        # Exact string match first
+        for entry in self._cap_table:
+            if entry.cap_urn == cap_urn:
+                return entry.plugin_idx
+
+        # URN-level matching: request is pattern, registered cap is instance
+        try:
+            request_urn = CapUrn.from_string(cap_urn)
+        except CapUrnError:
+            return None
+
+        for entry in self._cap_table:
             try:
-                err_frame = Frame.err(
-                    request_id,
-                    "PROTOCOL_ERROR",
-                    str(e)
-                )
-                await writer_queue.put(WriteFrame(err_frame))
-            except:
+                registered_urn = CapUrn.from_string(entry.cap_urn)
+            except CapUrnError:
+                continue
+            if request_urn.accepts(registered_urn):
+                return entry.plugin_idx
+
+        return None
+
+    def run(self, relay_read, relay_write, resource_fn: Optional[Callable] = None) -> None:
+        """Run the main event loop, reading from relay and plugins.
+
+        Blocks until relay closes or a fatal error occurs.
+
+        Args:
+            relay_read: Relay stdout stream (host reads from this)
+            relay_write: Relay stdin stream (host writes to this)
+            resource_fn: Optional function returning resource state bytes
+        """
+        relay_reader = FrameReader(relay_read)
+        relay_writer = FrameWriter(relay_write)
+
+        relay_queue = queue.Queue(maxsize=64)
+        relay_done = threading.Event()
+        relay_error = [None]
+
+        def relay_reader_thread():
+            try:
+                while True:
+                    frame = relay_reader.read()
+                    if frame is None:
+                        relay_done.set()
+                        return
+                    relay_queue.put(frame)
+            except Exception as e:
+                relay_error[0] = e
+                relay_done.set()
+
+        threading.Thread(target=relay_reader_thread, daemon=True).start()
+
+        while True:
+            # Check relay done
+            if relay_done.is_set() and relay_queue.empty():
+                self._kill_all_plugins()
+                if relay_error[0] is not None:
+                    raise IoError(str(relay_error[0]))
+                return
+
+            # Try to get a relay frame or plugin event (non-blocking check both)
+            try:
+                frame = relay_queue.get(timeout=0.01)
+                self._handle_relay_frame(frame, relay_writer)
+                continue
+            except queue.Empty:
                 pass
 
-    async def shutdown(self):
-        """Shutdown the host and clean up resources"""
-        # Send shutdown to writer
-        try:
-            await self._writer_queue.put(Shutdown())
-        except:
-            pass
+            try:
+                event = self._event_queue.get_nowait()
+                if event.is_death:
+                    self._handle_plugin_death(event.plugin_idx, relay_writer)
+                elif event.frame is not None:
+                    self._handle_plugin_frame(event.plugin_idx, event.frame, relay_writer)
+            except queue.Empty:
+                pass
 
-        # Cancel tasks
-        if not self.reader_task.done():
-            self.reader_task.cancel()
-        if not self.writer_task.done():
-            self.writer_task.cancel()
+    def _handle_relay_frame(self, frame: Frame, relay_writer: FrameWriter) -> None:
+        """Route an incoming frame from the relay to the correct plugin."""
+        with self._lock:
+            id_key = frame.id.to_string() if hasattr(frame.id, 'to_string') else str(frame.id)
 
-        # Wait for tasks to complete
+            if frame.frame_type == FrameType.REQ:
+                cap_urn = frame.cap or ""
+
+                plugin_idx = self._find_plugin_for_cap_locked(cap_urn)
+                if plugin_idx is None:
+                    err_frame = Frame.err(frame.id, "NO_HANDLER", f"no plugin handles cap: {cap_urn}")
+                    relay_writer.write(err_frame)
+                    return
+
+                plugin = self._plugins[plugin_idx]
+                if not plugin.running:
+                    if plugin.hello_failed:
+                        err_frame = Frame.err(frame.id, "SPAWN_FAILED", "plugin previously failed to start")
+                        relay_writer.write(err_frame)
+                        return
+                    err = self._spawn_plugin_locked(plugin_idx)
+                    if err is not None:
+                        err_frame = Frame.err(frame.id, "SPAWN_FAILED", str(err))
+                        relay_writer.write(err_frame)
+                        return
+
+                self._request_routing[id_key] = _RoutingEntry(plugin_idx=plugin_idx, msg_id=frame.id)
+                self._send_to_plugin(plugin_idx, frame)
+
+            elif frame.frame_type in (FrameType.STREAM_START, FrameType.CHUNK, FrameType.STREAM_END):
+                entry = self._request_routing.get(id_key)
+                if entry is not None:
+                    self._send_to_plugin(entry.plugin_idx, frame)
+
+            elif frame.frame_type == FrameType.END:
+                entry = self._request_routing.get(id_key)
+                if entry is not None:
+                    self._send_to_plugin(entry.plugin_idx, frame)
+                    if id_key not in self._peer_requests:
+                        del self._request_routing[id_key]
+
+            elif frame.frame_type == FrameType.ERR:
+                entry = self._request_routing.get(id_key)
+                if entry is not None:
+                    self._send_to_plugin(entry.plugin_idx, frame)
+                    self._request_routing.pop(id_key, None)
+                    self._peer_requests.pop(id_key, None)
+
+            elif frame.frame_type == FrameType.HEARTBEAT:
+                # Engine-level heartbeat — not forwarded to plugins
+                return
+
+            elif frame.frame_type == FrameType.HELLO:
+                raise Protocol("unexpected HELLO from relay")
+
+            elif frame.frame_type in (FrameType.RELAY_NOTIFY, FrameType.RELAY_STATE):
+                raise Protocol(f"relay frame {frame.frame_type} reached plugin host")
+
+    def _handle_plugin_frame(self, plugin_idx: int, frame: Frame, relay_writer: FrameWriter) -> None:
+        """Process a frame from a plugin."""
+        with self._lock:
+            id_key = frame.id.to_string() if hasattr(frame.id, 'to_string') else str(frame.id)
+
+            if frame.frame_type == FrameType.HEARTBEAT:
+                # Respond to plugin heartbeat locally — don't forward
+                response = Frame.heartbeat(frame.id)
+                self._send_to_plugin(plugin_idx, response)
+
+            elif frame.frame_type == FrameType.HELLO:
+                # HELLO post-handshake — protocol violation, ignore
+                return
+
+            elif frame.frame_type == FrameType.REQ:
+                # Plugin is invoking a peer cap (sending request to engine)
+                self._request_routing[id_key] = _RoutingEntry(plugin_idx=plugin_idx, msg_id=frame.id)
+                self._peer_requests[id_key] = True
+                relay_writer.write(frame)
+
+            elif frame.frame_type == FrameType.LOG:
+                relay_writer.write(frame)
+
+            elif frame.frame_type in (FrameType.STREAM_START, FrameType.CHUNK, FrameType.STREAM_END):
+                relay_writer.write(frame)
+
+            elif frame.frame_type == FrameType.END:
+                relay_writer.write(frame)
+                if id_key not in self._peer_requests:
+                    self._request_routing.pop(id_key, None)
+
+            elif frame.frame_type == FrameType.ERR:
+                relay_writer.write(frame)
+                self._request_routing.pop(id_key, None)
+                self._peer_requests.pop(id_key, None)
+
+    def _handle_plugin_death(self, plugin_idx: int, relay_writer: FrameWriter) -> None:
+        """Process a plugin death event."""
+        with self._lock:
+            plugin = self._plugins[plugin_idx]
+            plugin.running = False
+
+            if plugin.writer_queue is not None:
+                # Signal writer to stop
+                plugin.writer_queue.put(None)
+                plugin.writer_queue = None
+
+            if plugin.process is not None:
+                try:
+                    plugin.process.kill()
+                except Exception:
+                    pass
+                plugin.process = None
+
+            # Send ERR for all pending requests routed to this plugin
+            failed_keys = []
+            failed_entries = []
+            for req_id, entry in self._request_routing.items():
+                if entry.plugin_idx == plugin_idx:
+                    failed_keys.append(req_id)
+                    failed_entries.append(entry)
+
+            for i, key in enumerate(failed_keys):
+                err_frame = Frame.err(
+                    failed_entries[i].msg_id,
+                    "PLUGIN_DIED",
+                    f"plugin {plugin_idx} died"
+                )
+                relay_writer.write(err_frame)
+                del self._request_routing[key]
+                self._peer_requests.pop(key, None)
+
+            self._update_cap_table()
+            self._rebuild_capabilities()
+
+    def _send_to_plugin(self, plugin_idx: int, frame: Frame) -> None:
+        """Send a frame to a plugin via its writer queue."""
+        plugin = self._plugins[plugin_idx]
+        if plugin.writer_queue is not None:
+            try:
+                plugin.writer_queue.put_nowait(frame)
+            except queue.Full:
+                pass  # Plugin probably dead, frame dropped
+
+    def _writer_loop(self, writer: FrameWriter, q: queue.Queue) -> None:
+        """Writer thread — reads frames from queue and writes to plugin."""
+        while True:
+            frame = q.get()
+            if frame is None:  # Shutdown sentinel
+                return
+            try:
+                writer.write(frame)
+            except Exception:
+                return
+
+    def _reader_loop(self, plugin_idx: int, reader: FrameReader) -> None:
+        """Reader thread — reads frames from plugin and sends events."""
+        while True:
+            try:
+                frame = reader.read()
+                if frame is None:
+                    self._event_queue.put(_PluginEvent(
+                        plugin_idx=plugin_idx, frame=None, is_death=True
+                    ))
+                    return
+                self._event_queue.put(_PluginEvent(
+                    plugin_idx=plugin_idx, frame=frame, is_death=False
+                ))
+            except Exception:
+                self._event_queue.put(_PluginEvent(
+                    plugin_idx=plugin_idx, frame=None, is_death=True
+                ))
+                return
+
+    def _spawn_plugin_locked(self, plugin_idx: int) -> Optional[str]:
+        """Spawn a registered plugin process (caller must hold lock).
+
+        Returns None on success, error message string on failure.
+        """
+        plugin = self._plugins[plugin_idx]
+
+        if not plugin.path:
+            plugin.hello_failed = True
+            return "plugin has no path"
+
         try:
-            await asyncio.gather(self.reader_task, self.writer_task, return_exceptions=True)
-        except:
-            pass
+            proc = subprocess.Popen(
+                [plugin.path],
+                stdin=subprocess.PIPE,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.DEVNULL,
+            )
+        except Exception as e:
+            plugin.hello_failed = True
+            return f"failed to start plugin: {e}"
+
+        plugin.process = proc
+
+        reader = FrameReader(proc.stdout)
+        writer = FrameWriter(proc.stdin)
+
+        try:
+            result = handshake(reader, writer)
+        except Exception as e:
+            plugin.hello_failed = True
+            try:
+                proc.kill()
+            except Exception:
+                pass
+            return f"handshake failed: {e}"
+
+        try:
+            caps = _parse_caps_from_manifest(result.manifest)
+        except Exception as e:
+            plugin.hello_failed = True
+            try:
+                proc.kill()
+            except Exception:
+                pass
+            return f"failed to parse manifest: {e}"
+
+        plugin.manifest = result.manifest
+        plugin.limits = result.limits
+        plugin.caps = caps
+        plugin.running = True
+        plugin.writer = writer
+
+        writer_q = queue.Queue(maxsize=64)
+        plugin.writer_queue = writer_q
+
+        self._update_cap_table()
+        self._rebuild_capabilities()
+
+        threading.Thread(
+            target=self._writer_loop, args=(writer, writer_q),
+            daemon=True
+        ).start()
+        threading.Thread(
+            target=self._reader_loop, args=(plugin_idx, reader),
+            daemon=True
+        ).start()
+
+        return None
+
+    def _update_cap_table(self) -> None:
+        """Rebuild the cap table from all plugins."""
+        self._cap_table = []
+        for idx, plugin in enumerate(self._plugins):
+            if plugin.hello_failed:
+                continue
+            caps = plugin.known_caps
+            if plugin.running and len(plugin.caps) > 0:
+                caps = plugin.caps
+            for cap in caps:
+                self._cap_table.append(_CapTableEntry(cap_urn=cap, plugin_idx=idx))
+
+    def _rebuild_capabilities(self) -> None:
+        """Rebuild the aggregate capabilities JSON."""
+        all_caps = []
+        for plugin in self._plugins:
+            if plugin.running:
+                all_caps.extend(plugin.caps)
+
+        if not all_caps:
+            self._capabilities = None
+            return
+
+        self._capabilities = json.dumps({"caps": all_caps}).encode("utf-8")
+
+    def _kill_all_plugins(self) -> None:
+        """Stop all managed plugins."""
+        with self._lock:
+            for plugin in self._plugins:
+                if plugin.writer_queue is not None:
+                    plugin.writer_queue.put(None)
+                    plugin.writer_queue = None
+                if plugin.process is not None:
+                    try:
+                        plugin.process.kill()
+                    except Exception:
+                        pass
+                plugin.running = False
+
+
+# =========================================================================
+# Helpers
+# =========================================================================
+
+def _parse_caps_from_manifest(manifest: bytes) -> List[str]:
+    """Parse cap URNs from a JSON manifest.
+
+    Expected format: {"caps": [{"urn": "cap:op=test", ...}, ...]}
+    """
+    if not manifest:
+        return []
+
+    parsed = json.loads(manifest)
+    caps = []
+    for cap in parsed.get("caps", []):
+        urn = cap.get("urn", "")
+        if urn:
+            caps.append(urn)
+    return caps

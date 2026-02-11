@@ -348,22 +348,25 @@ def test_builder_key_normalization():
     assert cap.get_tag("op") == "Generate"
 
 
-# TEST024: Test compatibility checking (missing tags = wildcards, different directions = incompatible)
-def test_compatibility_checking():
-    # Compatible: same direction specs, different operation tags
+# TEST024: Test directional accepts (different op values, wildcard, direction mismatch)
+def test_directional_accepts():
+    # Different op values: neither accepts the other
     cap1 = CapUrn.from_string(_test_urn("op=generate"))
     cap2 = CapUrn.from_string(_test_urn("op=convert"))
-    # They have different op values, so they are NOT compatible
-    assert not cap1.is_compatible_with(cap2)
+    assert not cap1.accepts(cap2)
+    assert not cap2.accepts(cap1)
 
-    # Compatible: same direction, one has wildcard
+    # Wildcard op accepts specific op
     cap_wildcard = CapUrn.from_string(_test_urn("op=*"))
-    assert cap1.is_compatible_with(cap_wildcard)
+    assert cap_wildcard.accepts(cap1)
+    # cap1 also accepts wildcard (missing non-direction tag = implicit wildcard for cap matching)
+    assert cap1.accepts(cap_wildcard)
 
-    # Incompatible: different direction specs (both sides)
+    # Different direction specs: neither accepts the other
     cap3 = CapUrn.from_string(f'cap:in="media:bytes";out="media:form=map;textable";op=test')
     cap4 = CapUrn.from_string(f'cap:in="media:textable;form=scalar";out="media:integer;textable;numeric;form=scalar";op=test')
-    assert not cap3.is_compatible_with(cap4)
+    assert not cap3.accepts(cap4)
+    assert not cap4.accepts(cap3)
 
 
 # TEST025: Test find_best_match returns most specific matching cap

@@ -193,6 +193,12 @@ from capns.standard.caps import (
     llm_conversation_urn,
 )
 
+from capns.plugin_relay import (
+    RelaySlave,
+    RelayMaster,
+    RelayError,
+)
+
 __all__ = [
     # MediaUrn
     "MediaUrn",
@@ -368,4 +374,8 @@ __all__ = [
     "model_availability_urn",
     "model_path_urn",
     "llm_conversation_urn",
+    # Relay
+    "RelaySlave",
+    "RelayMaster",
+    "RelayError",
 ]
