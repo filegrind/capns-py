@@ -40,7 +40,9 @@ def test_frame_type_roundtrip():
 # TEST172: Test FrameType::from_u8 returns None for values outside the valid discriminant range
 def test_invalid_frame_type():
     """Test invalid frame type values return None"""
-    assert FrameType.from_u8(10) is None, "value 10 is one past StreamEnd"
+    assert FrameType.from_u8(10) == FrameType.RELAY_NOTIFY
+    assert FrameType.from_u8(11) == FrameType.RELAY_STATE
+    assert FrameType.from_u8(12) is None, "value 12 is one past RelayState"
     assert FrameType.from_u8(100) is None
     assert FrameType.from_u8(255) is None
 

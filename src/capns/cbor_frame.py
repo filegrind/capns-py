@@ -29,6 +29,10 @@ Each frame is a CBOR map with integer keys:
 - LOG (5): Log/progress message
 - ERR (6): Error message
 - HEARTBEAT (7): Health monitoring ping/pong
+- STREAM_START (8): Announce new stream for request
+- STREAM_END (9): End a specific stream
+- RELAY_NOTIFY (10): Relay capability advertisement (slave → master)
+- RELAY_STATE (11): Relay host system resources + cap demands (master → slave)
 """
 
 import uuid as uuid_module
@@ -60,6 +64,8 @@ class FrameType(IntEnum):
     HEARTBEAT = 7  # Health monitoring ping/pong
     STREAM_START = 8  # Announce new stream for request (multiplexed streaming)
     STREAM_END = 9  # End a specific stream (multiplexed streaming)
+    RELAY_NOTIFY = 10  # Relay capability advertisement (slave → master)
+    RELAY_STATE = 11   # Relay host system resources + cap demands (master → slave)
 
     @classmethod
     def from_u8(cls, v: int) -> Optional["FrameType"]:
@@ -371,6 +377,34 @@ class Frame:
         """
         frame = cls.new(FrameType.STREAM_END, req_id)
         frame.stream_id = stream_id
+        return frame
+
+    @classmethod
+    def relay_notify(cls, manifest: bytes, max_frame: int, max_chunk: int) -> "Frame":
+        """Create a RELAY_NOTIFY frame for capability advertisement (slave → master).
+
+        Args:
+            manifest: Aggregate manifest bytes (JSON-encoded list of all plugin caps)
+            max_frame: Maximum frame size for the relay connection
+            max_chunk: Maximum chunk size for the relay connection
+        """
+        frame = cls.new(FrameType.RELAY_NOTIFY, MessageId(0))
+        frame.meta = {
+            "manifest": manifest,
+            "max_frame": max_frame,
+            "max_chunk": max_chunk,
+        }
+        return frame
+
+    @classmethod
+    def relay_state(cls, resources: bytes) -> "Frame":
+        """Create a RELAY_STATE frame for host system resources + cap demands (master → slave).
+
+        Args:
+            resources: Opaque resource payload (CBOR or JSON encoded by the host)
+        """
+        frame = cls.new(FrameType.RELAY_STATE, MessageId(0))
+        frame.payload = resources
         return frame
 
     def is_eof(self) -> bool:
