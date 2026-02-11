@@ -1,11 +1,16 @@
 """Tests for PluginHost — multi-plugin relay-based host.
 
 Tests TEST413-TEST425 mirror the Go plugin_host_multi_test.go tests.
-Uses socket pairs (os.pipe) and threads to simulate plugins.
+Uses socket pairs and threads to simulate plugins.
+
+Socket lifecycle rules:
+- Plugin threads NEVER close host-side sockets (doing so discards unread data)
+- For clean exit: plugin handler returns, main thread closes all sockets after host.run
+- For death simulation: plugin closes only its own write end (plugin_socks)
 """
 
 import json
-import os
+import socket
 import threading
 import time
 
@@ -20,35 +25,47 @@ from capns.cbor_io import (
 )
 
 
-def make_pipe_pair():
-    """Create a bidirectional pipe pair for simulating plugin connections.
+def make_conn():
+    """Create a bidirectional connection using socket pairs.
 
-    Returns (host_read, host_write, plugin_read, plugin_write) as file objects.
-    host_read/host_write are what the host sees (plugin's stdout/stdin).
-    plugin_read/plugin_write are what the plugin side uses.
+    Returns (host_read, host_write, plugin_read, plugin_write, host_socks, plugin_socks).
+    - host_socks: [s1a, s2a] — close these to clean up from host side
+    - plugin_socks: [s1b, s2b] — close these to simulate plugin death
     """
-    # Plugin stdout → Host reads
-    plugin_stdout_r, plugin_stdout_w = os.pipe()
-    # Host writes → Plugin stdin
-    plugin_stdin_r, plugin_stdin_w = os.pipe()
+    # Channel 1: plugin writes (s1b) → host reads (s1a)
+    s1a, s1b = socket.socketpair(socket.AF_UNIX, socket.SOCK_STREAM)
+    # Channel 2: host writes (s2a) → plugin reads (s2b)
+    s2a, s2b = socket.socketpair(socket.AF_UNIX, socket.SOCK_STREAM)
 
-    host_read = os.fdopen(plugin_stdout_r, "rb")
-    plugin_write = os.fdopen(plugin_stdout_w, "wb")
-    plugin_read = os.fdopen(plugin_stdin_r, "rb")
-    host_write = os.fdopen(plugin_stdin_w, "wb")
+    host_read = s1a.makefile("rb")
+    plugin_write = s1b.makefile("wb")
+    plugin_read = s2b.makefile("rb")
+    host_write = s2a.makefile("wb")
 
-    return host_read, host_write, plugin_read, plugin_write
+    return host_read, host_write, plugin_read, plugin_write, [s1a, s2a], [s1b, s2b]
+
+
+def close_socks(socks):
+    """Shutdown and close a list of sockets."""
+    for s in socks:
+        try:
+            s.shutdown(socket.SHUT_RDWR)
+        except Exception:
+            pass
+        try:
+            s.close()
+        except Exception:
+            pass
+
+
+def cleanup(*sock_lists):
+    """Close all socket lists."""
+    for socks in sock_lists:
+        close_socks(socks)
 
 
 def simulate_plugin(plugin_read, plugin_write, manifest_str, handler=None):
-    """Run a simulated plugin: handshake + optional handler.
-
-    Args:
-        plugin_read: Plugin reads from this (host's writes)
-        plugin_write: Plugin writes to this (host reads)
-        manifest_str: JSON manifest string
-        handler: Optional function(reader, writer) called after handshake
-    """
+    """Run a simulated plugin: handshake + optional handler."""
     reader = FrameReader(plugin_read)
     writer = FrameWriter(plugin_write)
 
@@ -71,18 +88,14 @@ def test_register_plugin_adds_cap_table():
         assert host._cap_table[0].plugin_idx == 0
         assert host._cap_table[1].cap_urn == "cap:op=analyze"
         assert host._cap_table[1].plugin_idx == 0
-
         assert len(host._plugins) == 1
         assert not host._plugins[0].running, "registered plugin must not be running"
 
 
 # TEST414: Capabilities() returns None when no plugins are running
 def test_capabilities_empty_initially():
-    # Case 1: No plugins at all
     host = PluginHost()
     assert host.capabilities() is None, "no plugins → None capabilities"
-
-    # Case 2: Plugin registered but not running
     host.register_plugin("/path/to/plugin", ["cap:op=test"])
     assert host.capabilities() is None, "registered but not running → None capabilities"
 
@@ -92,169 +105,115 @@ def test_req_triggers_spawn():
     host = PluginHost()
     host.register_plugin("/nonexistent/plugin/binary", ["cap:op=test"])
 
-    # Set up relay pipes
-    relay_r, relay_w, engine_r, engine_w = make_pipe_pair()
-
+    hr, hw, pr, pw, hs, ps = make_conn()
     err_frame = [None]
 
-    def engine_thread():
-        writer = FrameWriter(engine_w)
-        reader = FrameReader(engine_r)
-
+    def engine():
+        w = FrameWriter(pw)
+        r = FrameReader(pr)
         req_id = MessageId.new_uuid()
-        req = Frame.req(req_id, "cap:op=test", b"hello", "text/plain")
-        writer.write(req)
-
-        # Read ERR response
-        frame = reader.read()
+        w.write(Frame.req(req_id, "cap:op=test", b"hello", "text/plain"))
+        frame = r.read()
         if frame is not None:
             err_frame[0] = frame
+        close_socks(ps)
 
-        # Close relay to end Run()
-        engine_w.close()
-        engine_r.close()
-
-    t = threading.Thread(target=engine_thread)
+    t = threading.Thread(target=engine, daemon=True)
     t.start()
 
-    host.run(relay_r, relay_w)
-    relay_r.close()
-    relay_w.close()
-    t.join()
+    host.run(hr, hw)
+    cleanup(hs, ps)
+    t.join(timeout=5)
 
     assert err_frame[0] is not None, "must receive ERR frame"
     assert err_frame[0].frame_type == FrameType.ERR
-    assert err_frame[0].error_code() == "SPAWN_FAILED", "spawn of nonexistent binary must fail"
+    assert err_frame[0].error_code() == "SPAWN_FAILED"
 
 
 # TEST416: AttachPlugin performs HELLO handshake, extracts manifest, updates capabilities
 def test_attach_plugin_handshake():
     manifest = '{"name":"Test","version":"1.0","caps":[{"urn":"cap:op=echo"}]}'
+    hr, hw, pr, pw, hs, ps = make_conn()
 
-    host_read, host_write, plugin_read, plugin_write = make_pipe_pair()
+    def plugin():
+        simulate_plugin(pr, pw, manifest)
+        # Don't close sockets — main thread handles cleanup
 
-    done = threading.Event()
-
-    def plugin_thread():
-        simulate_plugin(plugin_read, plugin_write, manifest)
-        plugin_read.close()
-        plugin_write.close()
-        done.set()
-
-    t = threading.Thread(target=plugin_thread)
+    t = threading.Thread(target=plugin, daemon=True)
     t.start()
 
     host = PluginHost()
-    idx = host.attach_plugin(host_read, host_write)
+    idx = host.attach_plugin(hr, hw)
 
-    assert idx == 0, "first attached plugin is index 0"
-
+    assert idx == 0
     with host._lock:
-        assert host._plugins[0].running, "attached plugin must be running"
+        assert host._plugins[0].running
         assert host._plugins[0].caps == ["cap:op=echo"]
 
     caps = host.capabilities()
-    assert caps is not None, "running plugin must produce capabilities"
+    assert caps is not None
     assert b"cap:op=echo" in caps
-
-    # Clean up
-    host_read.close()
-    host_write.close()
-    done.wait(timeout=5)
+    cleanup(hs, ps)
     t.join(timeout=5)
 
 
 # TEST417: Route REQ to correct plugin by cap_urn (two plugins)
 def test_route_req_by_cap_urn():
-    manifest_a = '{"name":"PluginA","version":"1.0","caps":[{"urn":"cap:op=convert"}]}'
-    manifest_b = '{"name":"PluginB","version":"1.0","caps":[{"urn":"cap:op=analyze"}]}'
+    manifest_a = '{"name":"A","version":"1.0","caps":[{"urn":"cap:op=convert"}]}'
+    manifest_b = '{"name":"B","version":"1.0","caps":[{"urn":"cap:op=analyze"}]}'
 
-    # Plugin A pipes
-    host_read_a, host_write_a, plugin_read_a, plugin_write_a = make_pipe_pair()
-    # Plugin B pipes
-    host_read_b, host_write_b, plugin_read_b, plugin_write_b = make_pipe_pair()
+    hr_a, hw_a, pr_a, pw_a, hs_a, ps_a = make_conn()
+    hr_b, hw_b, pr_b, pw_b, hs_b, ps_b = make_conn()
 
-    barrier = threading.Barrier(3)  # 2 plugins + engine
-
-    # Plugin A: reads REQ+END, responds with "converted"
-    def plugin_a_thread():
+    def plugin_a():
         def handler(r, w):
-            # Read REQ
             frame = r.read()
-            assert frame is not None
-            assert frame.frame_type == FrameType.REQ
+            if frame is None:
+                return
             req_id = frame.id
-
-            # Read until END
             while True:
                 f = r.read()
                 if f is None or f.frame_type == FrameType.END:
                     break
-
-            # Respond
             w.write(Frame.end(req_id, b"converted"))
+        simulate_plugin(pr_a, pw_a, manifest_a, handler)
 
-        simulate_plugin(plugin_read_a, plugin_write_a, manifest_a, handler)
-        plugin_read_a.close()
-        plugin_write_a.close()
-
-    # Plugin B: handshake only, expects no REQs
-    def plugin_b_thread():
+    def plugin_b():
         def handler(r, w):
-            # Should get EOF (no frames sent to B)
-            frame = r.read()
-            # frame is None on EOF or error
+            r.read()  # waits for EOF
+        simulate_plugin(pr_b, pw_b, manifest_b, handler)
 
-        simulate_plugin(plugin_read_b, plugin_write_b, manifest_b, handler)
-        plugin_read_b.close()
-        plugin_write_b.close()
-
-    t_a = threading.Thread(target=plugin_a_thread)
-    t_b = threading.Thread(target=plugin_b_thread)
+    t_a = threading.Thread(target=plugin_a, daemon=True)
+    t_b = threading.Thread(target=plugin_b, daemon=True)
     t_a.start()
     t_b.start()
 
     host = PluginHost()
-    host.attach_plugin(host_read_a, host_write_a)
-    host.attach_plugin(host_read_b, host_write_b)
+    host.attach_plugin(hr_a, hw_a)
+    host.attach_plugin(hr_b, hw_b)
 
-    # Relay pipes
-    relay_r, relay_w, engine_r, engine_w = make_pipe_pair()
-
+    r_hr, r_hw, r_pr, r_pw, r_hs, r_ps = make_conn()
     response_payload = [None]
 
-    def engine_thread():
-        writer = FrameWriter(engine_w)
-        reader = FrameReader(engine_r)
-
+    def engine():
+        w = FrameWriter(r_pw)
+        r = FrameReader(r_pr)
         req_id = MessageId.new_uuid()
-        writer.write(Frame.req(req_id, "cap:op=convert", b"", "text/plain"))
-        writer.write(Frame.end(req_id))
-
-        # Read response
-        frame = reader.read()
+        w.write(Frame.req(req_id, "cap:op=convert", b"", "text/plain"))
+        w.write(Frame.end(req_id))
+        frame = r.read()
         if frame is not None and frame.frame_type == FrameType.END:
             response_payload[0] = frame.payload
+        close_socks(r_ps)
 
-        engine_w.close()
-        engine_r.close()
-
-    t_eng = threading.Thread(target=engine_thread)
+    t_eng = threading.Thread(target=engine, daemon=True)
     t_eng.start()
 
-    host.run(relay_r, relay_w)
-    relay_r.close()
-    relay_w.close()
-
-    # Close host connections to unblock plugin B
-    host_read_b.close()
-    host_write_b.close()
-    host_read_a.close()
-    host_write_a.close()
-
-    t_eng.join(timeout=10)
-    t_a.join(timeout=10)
-    t_b.join(timeout=10)
+    host.run(r_hr, r_hw)
+    cleanup(hs_a, ps_a, hs_b, ps_b, r_hs, r_ps)
+    t_eng.join(timeout=5)
+    t_a.join(timeout=5)
+    t_b.join(timeout=5)
 
     assert response_payload[0] == b"converted"
 
@@ -262,237 +221,175 @@ def test_route_req_by_cap_urn():
 # TEST418: Route STREAM_START/CHUNK/STREAM_END/END by req_id
 def test_route_continuation_by_req_id():
     manifest = '{"name":"Test","version":"1.0","caps":[{"urn":"cap:op=cont"}]}'
-
-    host_read, host_write, plugin_read, plugin_write = make_pipe_pair()
-
-    def plugin_handler(r, w):
-        # Read REQ
-        req = r.read()
-        assert req is not None
-        assert req.frame_type == FrameType.REQ
-        req_id = req.id
-
-        # Read STREAM_START
-        ss = r.read()
-        assert ss is not None
-        assert ss.frame_type == FrameType.STREAM_START
-        assert ss.id.to_string() == req_id.to_string()
-
-        # Read CHUNK
-        chunk = r.read()
-        assert chunk is not None
-        assert chunk.frame_type == FrameType.CHUNK
-        assert chunk.id.to_string() == req_id.to_string()
-        assert chunk.payload == b"payload-data"
-
-        # Read STREAM_END
-        se = r.read()
-        assert se is not None
-        assert se.frame_type == FrameType.STREAM_END
-
-        # Read END
-        end = r.read()
-        assert end is not None
-        assert end.frame_type == FrameType.END
-
-        # Respond
-        w.write(Frame.end(req_id, b"ok"))
+    hr, hw, pr, pw, hs, ps = make_conn()
 
     def plugin_thread():
-        simulate_plugin(plugin_read, plugin_write, manifest, plugin_handler)
-        plugin_read.close()
-        plugin_write.close()
+        def handler(r, w):
+            req = r.read()
+            if req is None:
+                return
+            assert req.frame_type == FrameType.REQ
+            req_id = req.id
+            ss = r.read()
+            assert ss.frame_type == FrameType.STREAM_START
+            assert ss.id.to_string() == req_id.to_string()
+            chunk = r.read()
+            assert chunk.frame_type == FrameType.CHUNK
+            assert chunk.payload == b"payload-data"
+            se = r.read()
+            assert se.frame_type == FrameType.STREAM_END
+            end = r.read()
+            assert end.frame_type == FrameType.END
+            w.write(Frame.end(req_id, b"ok"))
+        simulate_plugin(pr, pw, manifest, handler)
 
-    t_p = threading.Thread(target=plugin_thread)
+    t_p = threading.Thread(target=plugin_thread, daemon=True)
     t_p.start()
 
     host = PluginHost()
-    host.attach_plugin(host_read, host_write)
+    host.attach_plugin(hr, hw)
 
-    relay_r, relay_w, engine_r, engine_w = make_pipe_pair()
+    r_hr, r_hw, r_pr, r_pw, r_hs, r_ps = make_conn()
+    response = [None]
 
-    response_payload = [None]
-
-    def engine_thread():
-        writer = FrameWriter(engine_w)
-        reader = FrameReader(engine_r)
-
+    def engine():
+        w = FrameWriter(r_pw)
+        r = FrameReader(r_pr)
         req_id = MessageId.new_uuid()
-        writer.write(Frame.req(req_id, "cap:op=cont", b"", "text/plain"))
-        writer.write(Frame.stream_start(req_id, "arg-0", "media:bytes"))
-        writer.write(Frame.chunk(req_id, "arg-0", 0, b"payload-data"))
-        writer.write(Frame.stream_end(req_id, "arg-0"))
-        writer.write(Frame.end(req_id))
-
-        # Read response
-        frame = reader.read()
+        w.write(Frame.req(req_id, "cap:op=cont", b"", "text/plain"))
+        w.write(Frame.stream_start(req_id, "arg-0", "media:bytes"))
+        w.write(Frame.chunk(req_id, "arg-0", 0, b"payload-data"))
+        w.write(Frame.stream_end(req_id, "arg-0"))
+        w.write(Frame.end(req_id))
+        frame = r.read()
         if frame is not None and frame.frame_type == FrameType.END:
-            response_payload[0] = frame.payload
+            response[0] = frame.payload
+        close_socks(r_ps)
 
-        engine_w.close()
-        engine_r.close()
-
-    t_eng = threading.Thread(target=engine_thread)
+    t_eng = threading.Thread(target=engine, daemon=True)
     t_eng.start()
 
-    host.run(relay_r, relay_w)
-    relay_r.close()
-    relay_w.close()
-    host_read.close()
-    host_write.close()
+    host.run(r_hr, r_hw)
+    cleanup(hs, ps, r_hs, r_ps)
+    t_eng.join(timeout=5)
+    t_p.join(timeout=5)
 
-    t_eng.join(timeout=10)
-    t_p.join(timeout=10)
-
-    assert response_payload[0] == b"ok"
+    assert response[0] == b"ok"
 
 
 # TEST419: Plugin HEARTBEAT handled locally (not forwarded to relay)
 def test_heartbeat_local_handling():
     manifest = '{"name":"Test","version":"1.0","caps":[{"urn":"cap:op=hb"}]}'
+    hr, hw, pr, pw, hs, ps = make_conn()
 
-    host_read, host_write, plugin_read, plugin_write = make_pipe_pair()
-
-    def plugin_handler(r, w):
-        # Send heartbeat
-        hb_id = MessageId.new_uuid()
-        w.write(Frame.heartbeat(hb_id))
-
-        # Read heartbeat response from host
-        resp = r.read()
-        assert resp is not None
-        assert resp.frame_type == FrameType.HEARTBEAT
-        assert resp.id.to_string() == hb_id.to_string()
-
-        # Now send a LOG to give engine something to read
-        log_id = MessageId.new_uuid()
-        w.write(Frame.log(log_id, "info", "heartbeat was answered"))
+    plugin_done = threading.Event()
 
     def plugin_thread():
-        simulate_plugin(plugin_read, plugin_write, manifest, plugin_handler)
-        plugin_read.close()
-        plugin_write.close()
+        def handler(r, w):
+            hb_id = MessageId.new_uuid()
+            w.write(Frame.heartbeat(hb_id))
+            resp = r.read()
+            assert resp is not None
+            assert resp.frame_type == FrameType.HEARTBEAT
+            assert resp.id.to_string() == hb_id.to_string()
+            log_id = MessageId.new_uuid()
+            w.write(Frame.log(log_id, "info", "heartbeat was answered"))
+            plugin_done.set()
+        simulate_plugin(pr, pw, manifest, handler)
 
-    t_p = threading.Thread(target=plugin_thread)
+    t_p = threading.Thread(target=plugin_thread, daemon=True)
     t_p.start()
 
     host = PluginHost()
-    host.attach_plugin(host_read, host_write)
+    host.attach_plugin(hr, hw)
 
-    relay_r, relay_w, engine_r, engine_w = make_pipe_pair()
-
+    r_hr, r_hw, r_pr, r_pw, r_hs, r_ps = make_conn()
     received_types = []
 
-    def engine_thread():
-        reader = FrameReader(engine_r)
+    def engine():
+        r = FrameReader(r_pr)
         while True:
-            frame = reader.read()
+            frame = r.read()
             if frame is None:
                 break
             received_types.append(frame.frame_type)
+            if frame.frame_type == FrameType.LOG:
+                break  # Got what we expected
 
-    t_eng = threading.Thread(target=engine_thread)
+    t_eng = threading.Thread(target=engine, daemon=True)
     t_eng.start()
 
-    # Let the host run briefly then close
     def close_relay():
-        time.sleep(1.0)
-        engine_w.close()
-        engine_r.close()
+        # Wait for plugin to send LOG, then give host time to forward it
+        plugin_done.wait(timeout=5.0)
+        time.sleep(0.1)  # Small delay for host to forward
+        close_socks(r_ps)
 
-    t_close = threading.Thread(target=close_relay)
+    t_close = threading.Thread(target=close_relay, daemon=True)
     t_close.start()
 
-    host.run(relay_r, relay_w)
-    relay_r.close()
-    relay_w.close()
-    host_read.close()
-    host_write.close()
+    host.run(r_hr, r_hw)
+    cleanup(hs, ps, r_hs, r_ps)
+    t_eng.join(timeout=5)
+    t_p.join(timeout=5)
+    t_close.join(timeout=5)
 
-    t_eng.join(timeout=10)
-    t_p.join(timeout=10)
-    t_close.join(timeout=10)
-
-    # HEARTBEAT must NOT appear in relay
     for ft in received_types:
         assert ft != FrameType.HEARTBEAT, "heartbeat must not be forwarded to relay"
-
-    # LOG must appear (proving relay received forwarded frames)
     assert FrameType.LOG in received_types, "LOG must be forwarded to relay"
 
 
 # TEST420: Plugin non-HELLO/non-HB frames forwarded to relay
 def test_plugin_frames_forwarded_to_relay():
     manifest = '{"name":"Test","version":"1.0","caps":[{"urn":"cap:op=fwd"}]}'
-
-    host_read, host_write, plugin_read, plugin_write = make_pipe_pair()
-
-    def plugin_handler(r, w):
-        # Read REQ from host
-        req = r.read()
-        if req is None:
-            return
-        req_id = req.id
-
-        # Read END
-        r.read()
-
-        # Send diverse frame types
-        w.write(Frame.log(req_id, "info", "processing"))
-        w.write(Frame.stream_start(req_id, "output", "media:bytes"))
-        w.write(Frame.chunk(req_id, "output", 0, b"data"))
-        w.write(Frame.stream_end(req_id, "output"))
-        w.write(Frame.end(req_id))
+    hr, hw, pr, pw, hs, ps = make_conn()
 
     def plugin_thread():
-        simulate_plugin(plugin_read, plugin_write, manifest, plugin_handler)
-        plugin_read.close()
-        plugin_write.close()
+        def handler(r, w):
+            req = r.read()
+            if req is None:
+                return
+            req_id = req.id
+            r.read()  # END
+            w.write(Frame.log(req_id, "info", "processing"))
+            w.write(Frame.stream_start(req_id, "output", "media:bytes"))
+            w.write(Frame.chunk(req_id, "output", 0, b"data"))
+            w.write(Frame.stream_end(req_id, "output"))
+            w.write(Frame.end(req_id))
+        simulate_plugin(pr, pw, manifest, handler)
 
-    t_p = threading.Thread(target=plugin_thread)
+    t_p = threading.Thread(target=plugin_thread, daemon=True)
     t_p.start()
 
     host = PluginHost()
-    host.attach_plugin(host_read, host_write)
+    host.attach_plugin(hr, hw)
 
-    relay_r, relay_w, engine_r, engine_w = make_pipe_pair()
-
+    r_hr, r_hw, r_pr, r_pw, r_hs, r_ps = make_conn()
     received_types = []
 
-    def engine_thread():
-        writer = FrameWriter(engine_w)
-        reader = FrameReader(engine_r)
-
-        # Send REQ + END
+    def engine():
+        w = FrameWriter(r_pw)
+        r = FrameReader(r_pr)
         req_id = MessageId.new_uuid()
-        writer.write(Frame.req(req_id, "cap:op=fwd", b"", "text/plain"))
-        writer.write(Frame.end(req_id))
-
-        # Read all forwarded frames
+        w.write(Frame.req(req_id, "cap:op=fwd", b"", "text/plain"))
+        w.write(Frame.end(req_id))
         while True:
-            frame = reader.read()
+            frame = r.read()
             if frame is None:
                 break
             received_types.append(frame.frame_type)
             if frame.frame_type == FrameType.END:
                 break
+        close_socks(r_ps)
 
-        engine_w.close()
-        engine_r.close()
-
-    t_eng = threading.Thread(target=engine_thread)
+    t_eng = threading.Thread(target=engine, daemon=True)
     t_eng.start()
 
-    host.run(relay_r, relay_w)
-    relay_r.close()
-    relay_w.close()
-    host_read.close()
-    host_write.close()
+    host.run(r_hr, r_hw)
+    cleanup(hs, ps, r_hs, r_ps)
+    t_eng.join(timeout=5)
+    t_p.join(timeout=5)
 
-    t_eng.join(timeout=10)
-    t_p.join(timeout=10)
-
-    # Verify forwarded types
     type_set = set(received_types)
     assert FrameType.LOG in type_set, "LOG must be forwarded"
     assert FrameType.STREAM_START in type_set, "STREAM_START must be forwarded"
@@ -503,49 +400,40 @@ def test_plugin_frames_forwarded_to_relay():
 # TEST421: Plugin death updates capability list (removes dead plugin's caps)
 def test_plugin_death_updates_caps():
     manifest = '{"name":"Test","version":"1.0","caps":[{"urn":"cap:op=die"}]}'
-
-    host_read, host_write, plugin_read, plugin_write = make_pipe_pair()
+    hr, hw, pr, pw, hs, ps = make_conn()
 
     def plugin_thread():
-        # Handshake then die immediately
-        simulate_plugin(plugin_read, plugin_write, manifest)
-        plugin_read.close()
-        plugin_write.close()
+        simulate_plugin(pr, pw, manifest)
+        # Die by closing plugin-side sockets → host sees EOF
+        close_socks(ps)
 
-    t_p = threading.Thread(target=plugin_thread)
+    t_p = threading.Thread(target=plugin_thread, daemon=True)
     t_p.start()
 
     host = PluginHost()
-    host.attach_plugin(host_read, host_write)
+    host.attach_plugin(hr, hw)
 
-    # Before death: caps must be present
     caps = host.capabilities()
     assert caps is not None
     assert b"cap:op=die" in caps
 
-    relay_r, relay_w, engine_r, engine_w = make_pipe_pair()
+    r_hr, r_hw, r_pr, r_pw, r_hs, r_ps = make_conn()
 
-    # Let host process death event briefly
     def close_relay():
         time.sleep(1.0)
-        engine_w.close()
-        engine_r.close()
+        close_socks(r_ps)
 
-    t_close = threading.Thread(target=close_relay)
+    t_close = threading.Thread(target=close_relay, daemon=True)
     t_close.start()
 
-    host.run(relay_r, relay_w)
+    host.run(r_hr, r_hw)
 
-    # After death: caps must be gone
     caps_after = host.capabilities()
     if caps_after is not None:
         parsed = json.loads(caps_after)
         assert len(parsed.get("caps", [])) == 0, "dead plugin caps must be removed"
 
-    relay_r.close()
-    relay_w.close()
-    host_read.close()
-    host_write.close()
+    cleanup(hs, ps, r_hs, r_ps)
     t_p.join(timeout=5)
     t_close.join(timeout=5)
 
@@ -553,61 +441,46 @@ def test_plugin_death_updates_caps():
 # TEST422: Plugin death sends ERR for all pending requests
 def test_plugin_death_sends_err():
     manifest = '{"name":"Test","version":"1.0","caps":[{"urn":"cap:op=die"}]}'
-
-    host_read, host_write, plugin_read, plugin_write = make_pipe_pair()
-
-    def plugin_handler(r, w):
-        # Read REQ
-        r.read()
-        # Die without responding
-        plugin_read.close()
-        plugin_write.close()
+    hr, hw, pr, pw, hs, ps = make_conn()
 
     def plugin_thread():
-        simulate_plugin(plugin_read, plugin_write, manifest, plugin_handler)
+        def handler(r, w):
+            r.read()  # Read REQ
+            # Die by closing plugin-side sockets
+            close_socks(ps)
+        simulate_plugin(pr, pw, manifest, handler)
 
-    t_p = threading.Thread(target=plugin_thread)
+    t_p = threading.Thread(target=plugin_thread, daemon=True)
     t_p.start()
 
     host = PluginHost()
-    host.attach_plugin(host_read, host_write)
+    host.attach_plugin(hr, hw)
 
-    relay_r, relay_w, engine_r, engine_w = make_pipe_pair()
-
+    r_hr, r_hw, r_pr, r_pw, r_hs, r_ps = make_conn()
     err_frame = [None]
 
-    def engine_thread():
-        writer = FrameWriter(engine_w)
-        reader = FrameReader(engine_r)
-
-        # Send REQ + END
+    def engine():
+        w = FrameWriter(r_pw)
+        r = FrameReader(r_pr)
         req_id = MessageId.new_uuid()
-        writer.write(Frame.req(req_id, "cap:op=die", b"hello", "text/plain"))
-        writer.write(Frame.end(req_id))
-
-        # Wait for ERR
+        w.write(Frame.req(req_id, "cap:op=die", b"hello", "text/plain"))
+        w.write(Frame.end(req_id))
         while True:
-            frame = reader.read()
+            frame = r.read()
             if frame is None:
                 break
             if frame.frame_type == FrameType.ERR:
                 err_frame[0] = frame
                 break
+        close_socks(r_ps)
 
-        engine_w.close()
-        engine_r.close()
-
-    t_eng = threading.Thread(target=engine_thread)
+    t_eng = threading.Thread(target=engine, daemon=True)
     t_eng.start()
 
-    host.run(relay_r, relay_w)
-    relay_r.close()
-    relay_w.close()
-    host_read.close()
-    host_write.close()
-
-    t_eng.join(timeout=10)
-    t_p.join(timeout=10)
+    host.run(r_hr, r_hw)
+    cleanup(hs, ps, r_hs, r_ps)
+    t_eng.join(timeout=5)
+    t_p.join(timeout=5)
 
     assert err_frame[0] is not None, "must receive ERR when plugin dies with pending request"
     assert err_frame[0].error_code() == "PLUGIN_DIED"
@@ -615,72 +488,60 @@ def test_plugin_death_sends_err():
 
 # TEST423: Multiple plugins with distinct caps route independently
 def test_multi_plugin_distinct_caps():
-    manifest_a = '{"name":"PluginA","version":"1.0","caps":[{"urn":"cap:op=alpha"}]}'
-    manifest_b = '{"name":"PluginB","version":"1.0","caps":[{"urn":"cap:op=beta"}]}'
+    manifest_a = '{"name":"A","version":"1.0","caps":[{"urn":"cap:op=alpha"}]}'
+    manifest_b = '{"name":"B","version":"1.0","caps":[{"urn":"cap:op=beta"}]}'
 
-    host_read_a, host_write_a, plugin_read_a, plugin_write_a = make_pipe_pair()
-    host_read_b, host_write_b, plugin_read_b, plugin_write_b = make_pipe_pair()
+    hr_a, hw_a, pr_a, pw_a, hs_a, ps_a = make_conn()
+    hr_b, hw_b, pr_b, pw_b, hs_b, ps_b = make_conn()
 
-    def plugin_a_handler(r, w):
-        req = r.read()
-        if req is None:
-            return
-        # Read until END
-        while True:
-            f = r.read()
-            if f is None or f.frame_type == FrameType.END:
-                break
-        w.write(Frame.end(req.id, b"from-A"))
+    def plugin_a():
+        def handler(r, w):
+            req = r.read()
+            if req is None:
+                return
+            while True:
+                f = r.read()
+                if f is None or f.frame_type == FrameType.END:
+                    break
+            w.write(Frame.end(req.id, b"from-A"))
+        simulate_plugin(pr_a, pw_a, manifest_a, handler)
 
-    def plugin_b_handler(r, w):
-        req = r.read()
-        if req is None:
-            return
-        while True:
-            f = r.read()
-            if f is None or f.frame_type == FrameType.END:
-                break
-        w.write(Frame.end(req.id, b"from-B"))
+    def plugin_b():
+        def handler(r, w):
+            req = r.read()
+            if req is None:
+                return
+            while True:
+                f = r.read()
+                if f is None or f.frame_type == FrameType.END:
+                    break
+            w.write(Frame.end(req.id, b"from-B"))
+        simulate_plugin(pr_b, pw_b, manifest_b, handler)
 
-    def plugin_a_thread():
-        simulate_plugin(plugin_read_a, plugin_write_a, manifest_a, plugin_a_handler)
-        plugin_read_a.close()
-        plugin_write_a.close()
-
-    def plugin_b_thread():
-        simulate_plugin(plugin_read_b, plugin_write_b, manifest_b, plugin_b_handler)
-        plugin_read_b.close()
-        plugin_write_b.close()
-
-    t_a = threading.Thread(target=plugin_a_thread)
-    t_b = threading.Thread(target=plugin_b_thread)
+    t_a = threading.Thread(target=plugin_a, daemon=True)
+    t_b = threading.Thread(target=plugin_b, daemon=True)
     t_a.start()
     t_b.start()
 
     host = PluginHost()
-    host.attach_plugin(host_read_a, host_write_a)
-    host.attach_plugin(host_read_b, host_write_b)
+    host.attach_plugin(hr_a, hw_a)
+    host.attach_plugin(hr_b, hw_b)
 
-    relay_r, relay_w, engine_r, engine_w = make_pipe_pair()
-
+    r_hr, r_hw, r_pr, r_pw, r_hs, r_ps = make_conn()
     responses = {}
     lock = threading.Lock()
 
-    def engine_thread():
-        writer = FrameWriter(engine_w)
-        reader = FrameReader(engine_r)
-
+    def engine():
+        w = FrameWriter(r_pw)
+        r = FrameReader(r_pr)
         alpha_id = MessageId.new_uuid()
-        writer.write(Frame.req(alpha_id, "cap:op=alpha", b"", "text/plain"))
-        writer.write(Frame.end(alpha_id))
-
+        w.write(Frame.req(alpha_id, "cap:op=alpha", b"", "text/plain"))
+        w.write(Frame.end(alpha_id))
         beta_id = MessageId.new_uuid()
-        writer.write(Frame.req(beta_id, "cap:op=beta", b"", "text/plain"))
-        writer.write(Frame.end(beta_id))
-
-        # Read 2 responses
+        w.write(Frame.req(beta_id, "cap:op=beta", b"", "text/plain"))
+        w.write(Frame.end(beta_id))
         for _ in range(2):
-            frame = reader.read()
+            frame = r.read()
             if frame is None:
                 break
             if frame.frame_type == FrameType.END:
@@ -690,24 +551,16 @@ def test_multi_plugin_distinct_caps():
                         responses["alpha"] = frame.payload
                     elif id_str == beta_id.to_string():
                         responses["beta"] = frame.payload
+        close_socks(r_ps)
 
-        engine_w.close()
-        engine_r.close()
-
-    t_eng = threading.Thread(target=engine_thread)
+    t_eng = threading.Thread(target=engine, daemon=True)
     t_eng.start()
 
-    host.run(relay_r, relay_w)
-    relay_r.close()
-    relay_w.close()
-    host_read_a.close()
-    host_write_a.close()
-    host_read_b.close()
-    host_write_b.close()
-
-    t_eng.join(timeout=10)
-    t_a.join(timeout=10)
-    t_b.join(timeout=10)
+    host.run(r_hr, r_hw)
+    cleanup(hs_a, ps_a, hs_b, ps_b, r_hs, r_ps)
+    t_eng.join(timeout=5)
+    t_a.join(timeout=5)
+    t_b.join(timeout=5)
 
     with lock:
         assert responses.get("alpha") == b"from-A"
@@ -717,67 +570,46 @@ def test_multi_plugin_distinct_caps():
 # TEST424: Concurrent requests to same plugin handled independently
 def test_concurrent_requests_same_plugin():
     manifest = '{"name":"Test","version":"1.0","caps":[{"urn":"cap:op=conc"}]}'
-
-    host_read, host_write, plugin_read, plugin_write = make_pipe_pair()
-
-    def plugin_handler(r, w):
-        # Read both REQs and ENDs, respond to each
-        req_ids = []
-
-        # Read REQ 0
-        req0 = r.read()
-        if req0 is None:
-            return
-        req_ids.append(req0.id)
-
-        # Read END for req 0
-        r.read()
-
-        # Read REQ 1
-        req1 = r.read()
-        if req1 is None:
-            return
-        req_ids.append(req1.id)
-
-        # Read END for req 1
-        r.read()
-
-        # Respond to each
-        w.write(Frame.end(req_ids[0], b"response-0"))
-        w.write(Frame.end(req_ids[1], b"response-1"))
+    hr, hw, pr, pw, hs, ps = make_conn()
 
     def plugin_thread():
-        simulate_plugin(plugin_read, plugin_write, manifest, plugin_handler)
-        plugin_read.close()
-        plugin_write.close()
+        def handler(r, w):
+            req_ids = []
+            req0 = r.read()
+            if req0 is None:
+                return
+            req_ids.append(req0.id)
+            r.read()  # END 0
+            req1 = r.read()
+            if req1 is None:
+                return
+            req_ids.append(req1.id)
+            r.read()  # END 1
+            w.write(Frame.end(req_ids[0], b"response-0"))
+            w.write(Frame.end(req_ids[1], b"response-1"))
+        simulate_plugin(pr, pw, manifest, handler)
 
-    t_p = threading.Thread(target=plugin_thread)
+    t_p = threading.Thread(target=plugin_thread, daemon=True)
     t_p.start()
 
     host = PluginHost()
-    host.attach_plugin(host_read, host_write)
+    host.attach_plugin(hr, hw)
 
-    relay_r, relay_w, engine_r, engine_w = make_pipe_pair()
-
+    r_hr, r_hw, r_pr, r_pw, r_hs, r_ps = make_conn()
     responses = {}
     lock = threading.Lock()
 
-    def engine_thread():
-        writer = FrameWriter(engine_w)
-        reader = FrameReader(engine_r)
-
+    def engine():
+        w = FrameWriter(r_pw)
+        r = FrameReader(r_pr)
         id0 = MessageId.new_uuid()
         id1 = MessageId.new_uuid()
-
-        writer.write(Frame.req(id0, "cap:op=conc", b"", "text/plain"))
-        writer.write(Frame.end(id0))
-
-        writer.write(Frame.req(id1, "cap:op=conc", b"", "text/plain"))
-        writer.write(Frame.end(id1))
-
-        # Read both responses
+        w.write(Frame.req(id0, "cap:op=conc", b"", "text/plain"))
+        w.write(Frame.end(id0))
+        w.write(Frame.req(id1, "cap:op=conc", b"", "text/plain"))
+        w.write(Frame.end(id1))
         for _ in range(2):
-            frame = reader.read()
+            frame = r.read()
             if frame is None:
                 break
             if frame.frame_type == FrameType.END:
@@ -787,21 +619,15 @@ def test_concurrent_requests_same_plugin():
                         responses["0"] = frame.payload
                     elif id_str == id1.to_string():
                         responses["1"] = frame.payload
+        close_socks(r_ps)
 
-        engine_w.close()
-        engine_r.close()
-
-    t_eng = threading.Thread(target=engine_thread)
+    t_eng = threading.Thread(target=engine, daemon=True)
     t_eng.start()
 
-    host.run(relay_r, relay_w)
-    relay_r.close()
-    relay_w.close()
-    host_read.close()
-    host_write.close()
-
-    t_eng.join(timeout=10)
-    t_p.join(timeout=10)
+    host.run(r_hr, r_hw)
+    cleanup(hs, ps, r_hs, r_ps)
+    t_eng.join(timeout=5)
+    t_p.join(timeout=5)
 
     with lock:
         assert responses.get("0") == b"response-0"

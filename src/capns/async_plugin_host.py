@@ -486,19 +486,18 @@ class PluginHost:
                 if entry is not None:
                     self._send_to_plugin(entry.plugin_idx, frame)
 
-            elif frame.frame_type == FrameType.END:
+            elif frame.frame_type in (FrameType.END, FrameType.ERR):
                 entry = self._request_routing.get(id_key)
                 if entry is not None:
                     self._send_to_plugin(entry.plugin_idx, frame)
-                    if id_key not in self._peer_requests:
-                        del self._request_routing[id_key]
-
-            elif frame.frame_type == FrameType.ERR:
-                entry = self._request_routing.get(id_key)
-                if entry is not None:
-                    self._send_to_plugin(entry.plugin_idx, frame)
-                    self._request_routing.pop(id_key, None)
-                    self._peer_requests.pop(id_key, None)
+                    is_terminal = True
+                    # Only remove routing on terminal frames if this is a PEER response
+                    # (engine responding to a plugin's peer invoke). For engine-initiated
+                    # requests, the relay END is just the end of the request body — the
+                    # plugin still needs to respond, so routing must survive.
+                    if is_terminal and id_key in self._peer_requests:
+                        self._request_routing.pop(id_key, None)
+                        self._peer_requests.pop(id_key, None)
 
             elif frame.frame_type == FrameType.HEARTBEAT:
                 # Engine-level heartbeat — not forwarded to plugins
@@ -578,7 +577,10 @@ class PluginHost:
                     "PLUGIN_DIED",
                     f"plugin {plugin_idx} died"
                 )
-                relay_writer.write(err_frame)
+                try:
+                    relay_writer.write(err_frame)
+                except Exception:
+                    pass  # Relay might already be gone
                 del self._request_routing[key]
                 self._peer_requests.pop(key, None)
 
