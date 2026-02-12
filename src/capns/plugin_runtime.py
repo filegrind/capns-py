@@ -878,8 +878,10 @@ class PluginRuntime:
             # STREAM_START
             frames.put(Frame.stream_start(request_id, stream_id, arg.media_urn))
 
-            # CHUNK (single chunk for each arg in CLI mode)
-            frames.put(Frame.chunk(request_id, stream_id, 0, arg.value))
+            # CHUNK: ALL values must be CBOR-encoded before sending as CHUNK payloads
+            # Protocol: CHUNK payloads contain CBOR-encoded data (encode once, no double-wrapping)
+            cbor_encoded = cbor2.dumps(arg.value)
+            frames.put(Frame.chunk(request_id, stream_id, 0, cbor_encoded))
 
             # STREAM_END
             frames.put(Frame.stream_end(request_id, stream_id))
@@ -1370,8 +1372,10 @@ class PluginRuntime:
     def _read_stdin_if_available(self) -> Optional[bytes]:
         """Read stdin if data is available (non-blocking check).
 
-        Returns None if stdin is a terminal (interactive) or if empty.
+        Returns None immediately if stdin is a terminal or no data is ready.
         """
+        import select
+
         # Don't read from stdin if it's a terminal (interactive)
         if sys.stdin.isatty():
             return None
@@ -1382,6 +1386,14 @@ class PluginRuntime:
             return None
 
         try:
+            # Non-blocking check: use select with 0 timeout to see if data is ready
+            ready, _, _ = select.select([sys.stdin], [], [], 0)
+
+            # No data ready - return None immediately without blocking
+            if not ready:
+                return None
+
+            # Data is ready - read it
             data = sys.stdin.buffer.read()
             if not data:
                 return None
@@ -1574,13 +1586,13 @@ class PluginRuntime:
             except MediaUrnError as e:
                 raise CliError(f"Invalid media URN '{arg_def.media_urn}': {e}")
 
-            # Check if this arg requires file-path to bytes conversion
+            # Check if this arg requires file-path to bytes conversion using pattern matching
             from .cap import StdinSource
 
             file_path_pattern = MediaUrn.from_string(MEDIA_FILE_PATH)
             file_path_array_pattern = MediaUrn.from_string(MEDIA_FILE_PATH_ARRAY)
 
-            # Check array first (more specific), then single file-path
+            # Pattern matching: check if patterns accept this instance
             is_array = file_path_array_pattern.accepts(arg_media_urn)
             is_file_path = is_array or file_path_pattern.accepts(arg_media_urn)
 
@@ -1634,7 +1646,7 @@ class PluginRuntime:
         """
         from .cap import StdinSource, PositionSource, CliFlagSource
 
-        # Check if this arg requires file-path to bytes conversion using proper URN matching
+        # Check if this arg requires file-path to bytes conversion using pattern matching
         try:
             arg_media_urn = MediaUrn.from_string(arg_def.media_urn)
         except MediaUrnError as e:
@@ -1643,7 +1655,7 @@ class PluginRuntime:
         file_path_pattern = MediaUrn.from_string(MEDIA_FILE_PATH)
         file_path_array_pattern = MediaUrn.from_string(MEDIA_FILE_PATH_ARRAY)
 
-        # Check array first (more specific), then single file-path
+        # Pattern matching: check if patterns accept this instance (array first, more specific)
         is_array = file_path_array_pattern.accepts(arg_media_urn)
         is_file_path = is_array or file_path_pattern.accepts(arg_media_urn)
 
