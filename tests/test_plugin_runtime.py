@@ -5,6 +5,7 @@ import json
 import cbor2
 import sys
 import queue
+import io
 from capns.plugin_runtime import (
     PluginRuntime,
     NoPeerInvoker,
@@ -1410,3 +1411,328 @@ def test_360_extract_effective_payload_with_file_data(tmp_path):
 
     # The effective payload should be the raw PDF bytes
     assert effective == pdf_content, "extract_effective_payload should extract file bytes"
+
+
+# TEST361: CLI mode with file path - pass file path as command-line argument
+def test_361_cli_mode_file_path(tmp_path):
+    from capns.cap import CapArg, StdinSource, PositionSource
+
+    test_file = tmp_path / "test361.pdf"
+    pdf_content = b"PDF content for CLI file path test"
+    test_file.write_bytes(pdf_content)
+
+    cap = create_test_cap(
+        'cap:in="media:pdf;bytes";op=process;out="media:void"',
+        "Process",
+        "process",
+        [CapArg(
+            media_urn="media:file-path;textable;form=scalar",
+            required=True,
+            sources=[
+                StdinSource("media:pdf;bytes"),
+                PositionSource(0),
+            ]
+        )]
+    )
+
+    manifest = create_test_manifest("TestPlugin", "1.0.0", "Test", [cap])
+    runtime = PluginRuntime.with_manifest(manifest)
+
+    # CLI mode: pass file path as positional argument
+    cli_args = [str(test_file)]
+    arguments = runtime.build_arguments_from_cli(runtime.manifest.caps[0], cli_args)
+
+    # Verify arguments contain file-path URN (before conversion)
+    assert len(arguments) == 1
+    # The argument should have the stdin source URN (after conversion)
+    assert arguments[0].media_urn == "media:pdf;bytes"
+    assert arguments[0].value == pdf_content
+
+
+# TEST362: CLI mode with binary piped in - pipe binary data via stdin
+#
+# This test simulates real-world conditions:
+# - Pure binary data piped to stdin (NOT CBOR)
+# - CLI mode detected (command arg present)
+# - Cap accepts stdin source
+# - Binary is chunked on-the-fly and accumulated
+# - Handler receives complete CBOR payload
+def test_362_cli_mode_piped_binary():
+    from capns.cap import CapArg, StdinSource
+    import io
+
+    # Simulate large binary being piped (1MB PDF)
+    pdf_content = bytes([0xAB] * 1_000_000)
+
+    # Create cap that accepts stdin
+    cap = create_test_cap(
+        'cap:in="media:pdf;bytes";op=process;out="media:void"',
+        "Process",
+        "process",
+        [CapArg(
+            media_urn="media:pdf;bytes",
+            required=True,
+            sources=[
+                StdinSource("media:pdf;bytes"),
+            ]
+        )]
+    )
+
+    manifest = create_test_manifest("TestPlugin", "1.0.0", "Test", [cap])
+    runtime = PluginRuntime.with_manifest(manifest)
+
+    # Mock stdin with BytesIO (simulates piped binary)
+    mock_stdin = io.BytesIO(pdf_content)
+
+    # Build payload from streaming reader (what CLI piped mode does)
+    from capns.cbor_frame import DEFAULT_MAX_CHUNK
+    payload = runtime._build_payload_from_streaming_reader(cap, mock_stdin, DEFAULT_MAX_CHUNK)
+
+    # Verify payload is CBOR array with correct structure
+    cbor_val = cbor2.loads(payload)
+    assert isinstance(cbor_val, list), "Expected CBOR array"
+    assert len(cbor_val) == 1, "CBOR array should have one argument"
+
+    arg_map = cbor_val[0]
+    assert isinstance(arg_map, dict), "Expected Map in CBOR array"
+
+    media_urn = arg_map.get("media_urn")
+    value = arg_map.get("value")
+
+    assert media_urn == "media:pdf;bytes", "Media URN should match cap in_spec"
+    assert value == pdf_content, "Binary content should be preserved exactly"
+
+
+# TEST363: CBOR mode with chunked content - send file content streaming as chunks
+def test_363_cbor_mode_chunked_content():
+    from capns.cap import CapArg, StdinSource
+    import queue
+
+    pdf_content = bytes([0xAA] * 10000)  # 10KB of data
+    received_data = []
+
+    def handler(frames, emitter, peer):
+        # TRUE STREAMING: Relay frames and verify
+        total = bytearray()
+        for frame in iter(frames.get, None):
+            if frame is None:
+                break
+            if frame.frame_type == FrameType.CHUNK:
+                if frame.payload is not None:
+                    total.extend(frame.payload)
+                    emitter.emit_cbor(frame.payload)
+
+        # Verify what we received
+        cbor_val = cbor2.loads(bytes(total))
+        if isinstance(cbor_val, list) and len(cbor_val) > 0:
+            arg_map = cbor_val[0]
+            if isinstance(arg_map, dict) and "value" in arg_map:
+                received_data.append(arg_map["value"])
+
+    cap = create_test_cap(
+        'cap:in="media:pdf;bytes";op=process;out="media:void"',
+        "Process",
+        "process",
+        [CapArg(
+            media_urn="media:pdf;bytes",
+            required=True,
+            sources=[
+                StdinSource("media:pdf;bytes"),
+            ]
+        )]
+    )
+
+    manifest = create_test_manifest("TestPlugin", "1.0.0", "Test", [cap])
+    runtime = PluginRuntime.with_manifest(manifest)
+    runtime.register_raw(cap.urn_string(), handler)
+
+    # Build CBOR payload
+    from capns.caller import CapArgumentValue
+    args = [CapArgumentValue(media_urn="media:pdf;bytes", value=pdf_content)]
+    payload_bytes = cbor2.dumps([
+        {
+            "media_urn": arg.media_urn,
+            "value": arg.value,
+        }
+        for arg in args
+    ])
+
+    # Simulate streaming: chunk payload and send via queue
+    handler_func = runtime.find_handler(cap.urn_string())
+    assert handler_func is not None, "Handler not found"
+
+    no_peer = NoPeerInvoker()
+    emitter = CliStreamEmitter()
+
+    frames = queue.Queue()
+    max_chunk = 262144
+    request_id = MessageId(0)
+    stream_id = "test-stream"
+
+    # Send STREAM_START
+    frames.put(Frame.stream_start(request_id, stream_id, "media:bytes"))
+
+    # Send CHUNK frames
+    offset = 0
+    seq = 0
+    while offset < len(payload_bytes):
+        chunk_size = min(len(payload_bytes) - offset, max_chunk)
+        frames.put(Frame.chunk(request_id, stream_id, seq, payload_bytes[offset:offset + chunk_size]))
+        offset += chunk_size
+        seq += 1
+
+    # Send STREAM_END and END
+    frames.put(Frame.stream_end(request_id, stream_id))
+    frames.put(Frame.end(request_id, None))
+    frames.put(None)
+
+    handler_func(frames, emitter, no_peer)
+
+    assert len(received_data) == 1, "Should receive data"
+    assert received_data[0] == pdf_content, "Handler should receive chunked content"
+
+
+# TEST364: CBOR mode with file path - send file path in CBOR arguments (auto-conversion)
+def test_364_cbor_mode_file_path(tmp_path):
+    test_file = tmp_path / "test364.pdf"
+    pdf_content = b"PDF content for CBOR file path test"
+    test_file.write_bytes(pdf_content)
+
+    # Build CBOR arguments with file-path URN
+    from capns.caller import CapArgumentValue
+    args = [CapArgumentValue(
+        media_urn="media:file-path;textable;form=scalar",
+        value=str(test_file).encode('utf-8'),
+    )]
+    payload = cbor2.dumps([
+        {
+            "media_urn": arg.media_urn,
+            "value": arg.value,
+        }
+        for arg in args
+    ])
+
+    # Verify the CBOR structure is correct
+    decoded = cbor2.loads(payload)
+    assert isinstance(decoded, list), "Expected CBOR array"
+    assert len(decoded) == 1, "Expected 1 argument"
+
+    arg_map = decoded[0]
+    assert isinstance(arg_map, dict), "Expected map"
+
+    media_urn = arg_map.get("media_urn")
+    value = arg_map.get("value")
+
+    assert media_urn == "media:file-path;textable;form=scalar", "Expected media:file-path URN"
+    assert value == str(test_file).encode('utf-8'), "Expected file path as value"
+
+
+# TEST395: Small payload (< max_chunk) produces correct CBOR arguments
+def test_395_build_payload_small():
+    cap = create_test_cap(
+        'cap:in="media:bytes";op=process;out="media:void"',
+        "Process",
+        "process",
+        [],
+    )
+
+    manifest = create_test_manifest("TestPlugin", "1.0.0", "Test", [cap])
+    runtime = PluginRuntime.with_manifest(manifest)
+
+    data = b"small payload"
+    reader = io.BytesIO(data)
+
+    from capns.cbor_frame import DEFAULT_MAX_CHUNK
+    payload = runtime._build_payload_from_streaming_reader(cap, reader, DEFAULT_MAX_CHUNK)
+
+    # Verify CBOR structure
+    cbor_val = cbor2.loads(payload)
+    assert isinstance(cbor_val, list), f"Expected list, got: {type(cbor_val)}"
+    assert len(cbor_val) == 1, f"Should have one argument, got: {len(cbor_val)}"
+
+    arg_map = cbor_val[0]
+    assert isinstance(arg_map, dict), f"Expected dict, got: {type(arg_map)}"
+    assert "value" in arg_map, "Argument should have 'value' field"
+
+    value_bytes = arg_map["value"]
+    assert isinstance(value_bytes, bytes), f"Expected bytes, got: {type(value_bytes)}"
+    assert value_bytes == data, f"Payload bytes should match, expected: {data}, got: {value_bytes}"
+
+
+# TEST396: Large payload (> max_chunk) accumulates across chunks correctly
+def test_396_build_payload_large():
+    cap = create_test_cap(
+        'cap:in="media:bytes";op=process;out="media:void"',
+        "Process",
+        "process",
+        [],
+    )
+
+    manifest = create_test_manifest("TestPlugin", "1.0.0", "Test", [cap])
+    runtime = PluginRuntime.with_manifest(manifest)
+
+    # Use small max_chunk to force multi-chunk
+    data = bytes(i % 256 for i in range(1000))
+    reader = io.BytesIO(data)
+
+    payload = runtime._build_payload_from_streaming_reader(cap, reader, 100)
+
+    cbor_val = cbor2.loads(payload)
+    arr = cbor_val
+    arg_map = arr[0]
+    value_bytes = arg_map["value"]
+
+    assert len(value_bytes) == 1000, f"All bytes should be accumulated, expected: 1000, got: {len(value_bytes)}"
+    assert value_bytes == data, "Data should match exactly"
+
+
+# TEST397: Empty reader produces valid empty CBOR arguments
+def test_397_build_payload_empty():
+    cap = create_test_cap(
+        'cap:in="media:bytes";op=process;out="media:void"',
+        "Process",
+        "process",
+        [],
+    )
+
+    manifest = create_test_manifest("TestPlugin", "1.0.0", "Test", [cap])
+    runtime = PluginRuntime.with_manifest(manifest)
+
+    reader = io.BytesIO(b"")
+
+    from capns.cbor_frame import DEFAULT_MAX_CHUNK
+    payload = runtime._build_payload_from_streaming_reader(cap, reader, DEFAULT_MAX_CHUNK)
+
+    cbor_val = cbor2.loads(payload)
+    arr = cbor_val
+    arg_map = arr[0]
+    value_bytes = arg_map["value"]
+
+    assert len(value_bytes) == 0, f"Empty reader should produce empty bytes, got: {len(value_bytes)} bytes"
+
+
+# ErrorReader that simulates an IO error
+class ErrorReader:
+    def read(self, size=-1):
+        raise IOError("simulated read error")
+
+
+# TEST398: IO error from reader propagates as error
+def test_398_build_payload_io_error():
+    cap = create_test_cap(
+        'cap:in="media:bytes";op=process;out="media:void"',
+        "Process",
+        "process",
+        [],
+    )
+
+    manifest = create_test_manifest("TestPlugin", "1.0.0", "Test", [cap])
+    runtime = PluginRuntime.with_manifest(manifest)
+
+    reader = ErrorReader()
+
+    from capns.cbor_frame import DEFAULT_MAX_CHUNK
+    with pytest.raises(IOError) as exc_info:
+        runtime._build_payload_from_streaming_reader(cap, reader, DEFAULT_MAX_CHUNK)
+
+    assert "simulated read error" in str(exc_info.value), f"Expected 'simulated read error', got: {exc_info.value}"

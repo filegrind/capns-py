@@ -1300,6 +1300,61 @@ class PluginRuntime:
             # stdin not available or can't be read
             return None
 
+    def _build_payload_from_streaming_reader(self, cap: Cap, reader, max_chunk: int) -> bytes:
+        """Build CBOR payload from streaming reader (testable version).
+
+        This simulates the CBOR chunked request flow for CLI piped stdin:
+        - Pure binary chunks from reader
+        - Accumulated in chunks (respecting max_chunk size)
+        - Built into CBOR arguments array (same format as CBOR mode)
+
+        This makes all 4 modes use the SAME payload format:
+        - CLI file path → read file → payload
+        - CLI piped binary → chunk reader → payload
+        - CBOR chunked → payload
+        - CBOR file path → auto-convert → payload
+
+        Args:
+            cap: The capability being invoked
+            reader: Binary stream reader (e.g., io.BytesIO)
+            max_chunk: Maximum chunk size for reading
+
+        Returns:
+            CBOR-encoded array of CapArgumentValue objects
+
+        Raises:
+            IOError: If reader encounters an error
+        """
+        # Accumulate chunks
+        chunks = []
+        total_bytes = 0
+
+        while True:
+            chunk = reader.read(max_chunk)
+            if not chunk:
+                break
+            chunks.append(chunk)
+            total_bytes += len(chunk)
+
+        # Concatenate chunks
+        complete_payload = b''.join(chunks)
+
+        # Build CBOR arguments array (same format as CBOR mode)
+        cap_urn = CapUrn.from_string(cap.urn_string())
+        expected_media_urn = cap_urn.in_spec()
+
+        arg = CapArgumentValue(media_urn=expected_media_urn, value=complete_payload)
+
+        # Encode as CBOR array
+        cbor_args = [
+            {
+                "media_urn": arg.media_urn,
+                "value": arg.value,
+            }
+        ]
+
+        return cbor2.dumps(cbor_args)
+
     def _read_file_path_to_bytes(self, path_value: str, is_array: bool) -> bytes:
         """Read file(s) for file-path arguments and return bytes.
 
