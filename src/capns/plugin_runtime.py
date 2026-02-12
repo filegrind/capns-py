@@ -253,13 +253,18 @@ class PeerInvokerImpl:
                     # STREAM_START
                     self.writer.write(Frame.stream_start(request_id, stream_id, arg.media_urn))
 
-                    # CHUNK(s)
+                    # CHUNK(s): Send argument data as CBOR-encoded chunks
+                    # Each CHUNK payload MUST be independently decodable CBOR
                     offset = 0
                     seq = 0
                     while offset < len(arg.value):
                         chunk_size = min(len(arg.value) - offset, max_chunk)
-                        chunk_data = arg.value[offset:offset + chunk_size]
-                        self.writer.write(Frame.chunk(request_id, stream_id, seq, chunk_data))
+                        chunk_bytes = arg.value[offset:offset + chunk_size]
+
+                        # CBOR-encode chunk as bytes - independently decodable
+                        cbor_payload = cbor2.dumps(chunk_bytes)
+
+                        self.writer.write(Frame.chunk(request_id, stream_id, seq, cbor_payload))
                         offset += chunk_size
                         seq += 1
 
@@ -362,26 +367,111 @@ class ThreadSafeEmitter:
 
     def emit_cbor(self, value: Any) -> None:
         """Emit a CBOR value as output.
-        The value is CBOR-encoded once and sent as raw CBOR bytes in CHUNK frames.
-        No double-encoding: one CBOR layer from handler to consumer.
+
+        CHUNK payloads = complete, independently decodable CBOR values.
+
+        Streams might never end (logs, video, real-time data), so each CHUNK must be
+        processable immediately without waiting for END frame.
+
+        For bytes/str: split raw data, encode each chunk as complete value
+        For other types: encode once (typically small)
+
+        Each CHUNK payload can be decoded independently: cbor2.loads(chunk.payload)
         Raises: RuntimeError on write failure."""
         self._ensure_stream_started()
 
-        # CBOR-encode the value once
-        cbor_payload = cbor2.dumps(value)
+        # Split large byte/text data, encode each chunk as complete CBOR value
+        if isinstance(value, bytes):
+            # Split bytes BEFORE encoding, encode each chunk as bytes
+            offset = 0
+            while offset < len(value):
+                chunk_size = min(self.max_chunk, len(value) - offset)
+                chunk_bytes = value[offset:offset + chunk_size]
 
-        # Auto-chunk the CBOR-encoded payload
-        offset = 0
-        while offset < len(cbor_payload):
-            chunk_size = min(self.max_chunk, len(cbor_payload) - offset)
-            chunk_data = cbor_payload[offset:offset + chunk_size]
-            offset += chunk_size
+                # Encode as complete bytes - independently decodable
+                cbor_payload = cbor2.dumps(chunk_bytes)
+
+                with self.seq_lock:
+                    seq = self.seq
+                    self.seq += 1
+
+                frame = Frame.chunk(self.request_id, self.stream_id, seq, cbor_payload)
+                with self.writer_lock:
+                    self.writer.write(frame)
+
+                offset += chunk_size
+
+        elif isinstance(value, str):
+            # Split string BEFORE encoding, encode each chunk as str
+            # Encode to bytes to measure size, but keep as str for CBOR
+            str_bytes = value.encode('utf-8')
+            offset = 0
+            while offset < len(str_bytes):
+                chunk_size = min(self.max_chunk, len(str_bytes) - offset)
+                # Ensure we split on UTF-8 character boundaries
+                while chunk_size > 0:
+                    try:
+                        chunk_str = str_bytes[offset:offset + chunk_size].decode('utf-8')
+                        break
+                    except UnicodeDecodeError:
+                        chunk_size -= 1
+                if chunk_size == 0:
+                    raise RuntimeError("Cannot split string on character boundary")
+
+                # Encode as complete str - independently decodable
+                cbor_payload = cbor2.dumps(chunk_str)
+
+                with self.seq_lock:
+                    seq = self.seq
+                    self.seq += 1
+
+                frame = Frame.chunk(self.request_id, self.stream_id, seq, cbor_payload)
+                with self.writer_lock:
+                    self.writer.write(frame)
+
+                offset += len(chunk_str.encode('utf-8'))
+
+        elif isinstance(value, list):
+            # Array: send each element as independent CBOR chunk
+            # Allows receiver to reconstruct elements without waiting for entire array
+            for element in value:
+                # Encode each element as complete CBOR value
+                cbor_payload = cbor2.dumps(element)
+
+                with self.seq_lock:
+                    seq = self.seq
+                    self.seq += 1
+
+                frame = Frame.chunk(self.request_id, self.stream_id, seq, cbor_payload)
+                with self.writer_lock:
+                    self.writer.write(frame)
+
+        elif isinstance(value, dict):
+            # Map: send each entry as independent CBOR chunk
+            # Receiver must wait for all entries before reconstructing map
+            for key, val in value.items():
+                # Encode each key-value pair as a 2-element list: [key, value]
+                entry = [key, val]
+                cbor_payload = cbor2.dumps(entry)
+
+                with self.seq_lock:
+                    seq = self.seq
+                    self.seq += 1
+
+                frame = Frame.chunk(self.request_id, self.stream_id, seq, cbor_payload)
+                with self.writer_lock:
+                    self.writer.write(frame)
+
+        else:
+            # For other types (int, float, bool, None): encode as single chunk
+            # These have single-value semantics and are typically small
+            cbor_payload = cbor2.dumps(value)
 
             with self.seq_lock:
                 seq = self.seq
                 self.seq += 1
 
-            frame = Frame.chunk(self.request_id, self.stream_id, seq, chunk_data)
+            frame = Frame.chunk(self.request_id, self.stream_id, seq, cbor_payload)
             with self.writer_lock:
                 self.writer.write(frame)
 
