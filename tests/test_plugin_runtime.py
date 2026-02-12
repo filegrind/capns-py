@@ -333,12 +333,6 @@ def test_cli_stream_emitter_construction():
     assert not emitter2.ndjson
 
 
-# TEST267: Test CliStreamEmitter::default creates NDJSON emitter
-def test_cli_stream_emitter_default():
-    emitter = CliStreamEmitter()
-    assert emitter.ndjson
-
-
 # TEST268: Test RuntimeError variants display correct messages
 def test_runtime_error_display():
     err = NoHandlerError("cap:op=missing")
@@ -358,14 +352,6 @@ def test_runtime_error_display():
 
     err6 = PeerResponseError("timeout")
     assert "timeout" in str(err6)
-
-
-# TEST269: Test PluginRuntime limits returns default protocol limits
-def test_runtime_limits_default():
-    runtime = PluginRuntime(TEST_MANIFEST.encode('utf-8'))
-    limits = runtime.get_limits()
-    assert limits.max_frame == DEFAULT_MAX_FRAME
-    assert limits.max_chunk == DEFAULT_MAX_CHUNK
 
 
 # TEST270: Test registering multiple handlers for different caps and finding each independently

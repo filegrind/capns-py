@@ -155,10 +155,11 @@ class StreamEmitter(Protocol):
 class PeerInvoker(Protocol):
     """Allows handlers to invoke caps on the peer (host).
 
-    The `invoke` method sends a request and returns a queue that receives
-    bare CBOR Frame objects (STREAM_START, CHUNK, STREAM_END, END, ERR) as
-    they arrive from the host. The consumer processes frames directly - no
-    decoding, no wrapper types. The stream may be infinite.
+    Sends REQ + streaming argument frames to the host. The main reader loop
+    (running in a separate thread) receives response frames and forwards them
+    to a queue. Returns a queue that yields bare CBOR Frame objects (STREAM_START,
+    CHUNK, STREAM_END, END, ERR) as they arrive from the host. The consumer
+    processes frames directly - no decoding, no wrapper types.
     """
 
     def invoke(self, cap_urn: str, arguments: List[CapArgumentValue]) -> queue.Queue:
