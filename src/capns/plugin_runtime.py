@@ -135,59 +135,36 @@ class ManifestError(RuntimeError):
 class StreamEmitter(Protocol):
     """A streaming emitter that writes chunks immediately to the output.
     Thread-safe for use in concurrent handlers.
-    All methods raise exceptions on error - no silent failures.
+    Handlers emit CBOR values via emit_cbor() or logs via emit_log().
+    The value is CBOR-encoded once and sent as raw CBOR bytes in CHUNK frames.
+    No double-encoding: one CBOR layer from handler to consumer.
     """
 
-    def emit_bytes(self, payload: bytes) -> None:
-        """Emit raw bytes as a chunk immediately.
+    def emit_cbor(self, value: Any) -> None:
+        """Emit a CBOR value as output.
+        The value is CBOR-encoded once and sent as raw CBOR bytes in CHUNK frames.
         Raises: RuntimeError on write failure."""
         ...
 
-    def emit(self, payload: Any) -> None:
-        """Emit a JSON value as a chunk.
-        The value is serialized to JSON bytes and sent as the chunk payload.
-        Raises: SerializeError on serialization failure, RuntimeError on write failure."""
-        data = json.dumps(payload).encode('utf-8')
-        self.emit_bytes(data)
-
-    def emit_status(self, operation: str, details: str) -> None:
-        """Emit a status/progress message."""
-        self.emit({
-            "type": "status",
-            "operation": operation,
-            "details": details
-        })
-
-    def log(self, level: str, message: str) -> None:
-        """Emit a log message at the given level."""
+    def emit_log(self, level: str, message: str) -> None:
+        """Emit a log message at the given level.
+        Sends a LOG frame (side-channel, does not affect response stream)."""
         ...
 
 
 class PeerInvoker(Protocol):
     """Allows handlers to invoke caps on the peer (host).
 
-    This trait enables bidirectional communication where a plugin handler can
-    invoke caps on the host while processing a request. This is essential for
-    sandboxed plugins that need to delegate certain operations (like model
-    downloading) to the host.
-
-    The `invoke` method sends a REQ frame to the host and returns an iterator
-    that yields response chunks as they arrive.
+    The `invoke` method sends a request and returns a queue that receives
+    bare CBOR Frame objects (STREAM_START, CHUNK, STREAM_END, END, ERR) as
+    they arrive from the host. The consumer processes frames directly - no
+    decoding, no wrapper types. The stream may be infinite.
     """
 
-    def invoke(self, cap_urn: str, arguments: List[CapArgumentValue]) -> Any:
+    def invoke(self, cap_urn: str, arguments: List[CapArgumentValue]) -> queue.Queue:
         """Invoke a cap on the host with arguments.
 
-        Sends a REQ frame to the host with the specified cap URN and arguments.
-        Arguments are serialized as CBOR with native binary values.
-        Returns an iterator that yields response chunks (bytes) or raises errors.
-
-        Args:
-            cap_urn: The cap URN to invoke on the host
-            arguments: Arguments identified by media_urn
-
-        Returns:
-            An iterator that yields bytes for each chunk
+        Returns a queue that receives bare Frame objects.
         """
         ...
 
@@ -197,15 +174,17 @@ class NoPeerInvoker:
     Used when peer invocation is not supported (CLI mode only).
     """
 
-    def invoke(self, cap_urn: str, arguments: List[CapArgumentValue]) -> Any:
+    def invoke(self, cap_urn: str, arguments: List[CapArgumentValue]) -> queue.Queue:
         raise PeerRequestError("Peer invocation not supported in this context")
 
 
 class PendingPeerRequest:
-    """Internal struct to track pending peer requests (plugin invoking host caps)."""
+    """Internal struct to track pending peer requests (plugin invoking host caps).
+    The reader loop forwards response frames to the queue."""
     def __init__(self):
-        # Bounded queue for responses (buffer up to 64 chunks)
+        # Bounded queue for response frames (buffer up to 64 frames)
         self.queue: queue.Queue = queue.Queue(maxsize=64)
+        self.ended: bool = False  # True after END frame (close channel)
 
 
 @dataclass
@@ -241,12 +220,12 @@ class PeerInvokerImpl:
         self.pending_lock = threading.Lock()
         self.max_chunk = max_chunk if max_chunk is not None else DEFAULT_MAX_CHUNK
 
-    def invoke(self, cap_urn: str, arguments: List[CapArgumentValue]) -> Any:
+    def invoke(self, cap_urn: str, arguments: List[CapArgumentValue]) -> queue.Queue:
         """Invoke a cap on the host with arguments.
 
         Protocol v2: Sends REQ(empty) + STREAM_START + CHUNK(s) + STREAM_END + END
         for each argument as an independent stream.
-        Returns an iterator that yields response chunks (bytes) or raises errors.
+        Returns a queue that receives bare Frame objects from the host.
         """
         import uuid as _uuid
 
@@ -294,35 +273,8 @@ class PeerInvokerImpl:
                 del self.pending_requests[request_id_str]
             raise PeerRequestError(f"Failed to send peer request frames: {e}")
 
-        return self._response_iterator(request_id_str, pending_req)
-
-    def _response_iterator(self, request_id_str: str, pending_req: PendingPeerRequest):
-        """Generator that yields response chunks from the queue."""
-        while True:
-            try:
-                # Block waiting for response chunk
-                item = pending_req.queue.get(timeout=30.0)  # 30 second timeout
-
-                if item[0] == "ok":
-                    # Got a chunk of data
-                    yield item[1]
-                elif item[0] == "end":
-                    # Got final END frame
-                    if item[1]:  # If there's final payload
-                        yield item[1]
-                    break
-                elif item[0] == "error":
-                    # Got error from host
-                    raise PeerResponseError(item[1])
-                else:
-                    raise PeerResponseError(f"Unknown response type: {item[0]}")
-
-            except queue.Empty:
-                # Timeout waiting for response
-                with self.pending_lock:
-                    if request_id_str in self.pending_requests:
-                        del self.pending_requests[request_id_str]
-                raise PeerResponseError("Timeout waiting for host response")
+        # Return the queue directly - caller will receive bare Frame objects
+        return pending_req.queue
 
 
 class CliStreamEmitter:
@@ -343,28 +295,35 @@ class CliStreamEmitter:
         """Create a CLI emitter without NDJSON formatting"""
         return cls(ndjson=False)
 
-    def emit_bytes(self, payload: bytes) -> None:
+    def emit_cbor(self, value: Any) -> None:
+        """Emit a CBOR value to stdout.
+        In CLI mode: extract raw bytes/text from CBOR and emit to stdout.
+        Supported types: bytes, str, list of bytes/str.
+        NO FALLBACK - fail hard if unsupported type.
+        """
         stdout = sys.stdout.buffer
-        stdout.write(payload)
+
+        if isinstance(value, bytes):
+            stdout.write(value)
+        elif isinstance(value, str):
+            stdout.write(value.encode('utf-8'))
+        elif isinstance(value, list):
+            # Array - emit each element's raw content
+            for item in value:
+                if isinstance(item, bytes):
+                    stdout.write(item)
+                elif isinstance(item, str):
+                    stdout.write(item.encode('utf-8'))
+                else:
+                    raise RuntimeError(f"Handler emitted unsupported list element type: {type(item)}")
+        else:
+            raise RuntimeError(f"Handler emitted unsupported CBOR type: {type(value)}")
+
         if self.ndjson:
             stdout.write(b'\n')
         stdout.flush()
 
-    def emit_status(self, operation: str, details: str) -> None:
-        """In CLI mode, status messages go to stderr so only the final response is on stdout.
-        This allows external callers to parse stdout as a single JSON response.
-        """
-        status = {
-            "type": "status",
-            "operation": operation,
-            "details": details
-        }
-        try:
-            print(json.dumps(status), file=sys.stderr)
-        except Exception:
-            pass
-
-    def log(self, level: str, message: str) -> None:
+    def emit_log(self, level: str, message: str) -> None:
         """In CLI mode, logs go to stderr"""
         print(f"[{level.upper()}] {message}", file=sys.stderr)
 
@@ -400,14 +359,15 @@ class ThreadSafeEmitter:
                 with self.writer_lock:
                     self.writer.write(start_frame)
 
-    def emit_bytes(self, payload: bytes) -> None:
-        """CBOR-encode payload as a byte string and send as CHUNK frame(s).
-        Matches Rust emit_cbor behavior — all emissions are CBOR-encoded.
-        """
+    def emit_cbor(self, value: Any) -> None:
+        """Emit a CBOR value as output.
+        The value is CBOR-encoded once and sent as raw CBOR bytes in CHUNK frames.
+        No double-encoding: one CBOR layer from handler to consumer.
+        Raises: RuntimeError on write failure."""
         self._ensure_stream_started()
 
-        # CBOR-encode the payload as a CBOR byte string (matches Rust emit_cbor)
-        cbor_payload = cbor2.dumps(payload)
+        # CBOR-encode the value once
+        cbor_payload = cbor2.dumps(value)
 
         # Auto-chunk the CBOR-encoded payload
         offset = 0
@@ -447,24 +407,115 @@ class ThreadSafeEmitter:
         with self.writer_lock:
             self.writer.write(end_frame)
 
-    def log(self, level: str, message: str) -> None:
+    def emit_log(self, level: str, message: str) -> None:
+        """Emit a log message at the given level.
+        Sends a LOG frame (side-channel, does not affect response stream)."""
         frame = Frame.log(self.request_id, level, message)
         with self.writer_lock:
             self.writer.write(frame)
 
-    def emit_status(self, operation: str, details: str) -> None:
-        """Send status as LOG frame (side-channel, best-effort)."""
-        try:
-            message = f"{operation}: {details}"
-            frame = Frame.log(self.request_id, "status", message)
-            with self.writer_lock:
-                self.writer.write(frame)
-        except Exception:
-            pass
+
+# Handler function type - receives bare CBOR Frame objects
+# Handler has full streaming control - decides when to consume frames and when to produce output.
+HandlerFn = Callable[[queue.Queue, StreamEmitter, PeerInvoker], None]
 
 
-# Handler function type
-HandlerFn = Callable[[bytes, StreamEmitter, PeerInvoker], bytes]
+def collect_args_by_media_urn(frames: queue.Queue, media_urn: str) -> bytes:
+    """Collect and concatenate payload chunks for a specific media URN from frame stream.
+
+    Processes frames in order: STREAM_START → CHUNK(s) → STREAM_END → END
+    Returns the concatenated payload for the first stream matching the media URN.
+
+    Args:
+        frames: Queue of Frame objects (will be consumed)
+        media_urn: Media URN to match (e.g., "media:bytes")
+
+    Returns:
+        Concatenated payload bytes for matching stream
+
+    Raises:
+        RuntimeError: If no matching stream found or protocol error
+    """
+    try:
+        target_urn = MediaUrn.from_string(media_urn)
+    except Exception as e:
+        raise RuntimeError(f"Invalid media URN '{media_urn}': {e}")
+
+    # Track streams: stream_id → (media_urn, chunks)
+    streams = {}
+    result = None
+
+    for frame in iter(frames.get, None):
+        if frame.frame_type == FrameType.STREAM_START:
+            if frame.stream_id and frame.media_urn:
+                streams[frame.stream_id] = (frame.media_urn, [])
+
+        elif frame.frame_type == FrameType.CHUNK:
+            if frame.stream_id and frame.stream_id in streams:
+                if frame.payload:
+                    streams[frame.stream_id][1].append(frame.payload)
+
+        elif frame.frame_type == FrameType.STREAM_END:
+            if frame.stream_id and frame.stream_id in streams:
+                stream_media_urn, chunks = streams[frame.stream_id]
+                # Check if this stream matches target
+                try:
+                    stream_urn = MediaUrn.from_string(stream_media_urn)
+                    if target_urn.accepts(stream_urn) or stream_urn.accepts(target_urn):
+                        result = b''.join(chunks)
+                        # Found match - consume rest of frames and return
+                        for _ in iter(frames.get, None):
+                            pass
+                        return result
+                except Exception:
+                    continue
+
+        elif frame.frame_type == FrameType.END:
+            break
+
+        elif frame.frame_type == FrameType.ERR:
+            code = frame.error_code() or "UNKNOWN"
+            message = frame.error_message() or "Unknown error"
+            raise RuntimeError(f"[{code}] {message}")
+
+    if result is not None:
+        return result
+
+    # No matching stream found
+    raise RuntimeError(f"No stream found matching media URN '{media_urn}'")
+
+
+def collect_peer_response(frames: queue.Queue) -> bytes:
+    """Collect and concatenate all CHUNK payloads from a peer response frame stream.
+
+    Processes frames in order: STREAM_START → CHUNK(s) → STREAM_END → END
+    Returns concatenated payload from all chunks.
+
+    Args:
+        frames: Queue of Frame objects from PeerInvoker.invoke()
+
+    Returns:
+        Concatenated payload bytes
+
+    Raises:
+        RuntimeError: If ERR frame received or protocol error
+    """
+    chunks = []
+
+    for frame in iter(frames.get, None):
+        if frame.frame_type == FrameType.CHUNK:
+            if frame.payload:
+                chunks.append(frame.payload)
+
+        elif frame.frame_type == FrameType.END:
+            break
+
+        elif frame.frame_type == FrameType.ERR:
+            code = frame.error_code() or "UNKNOWN"
+            message = frame.error_message() or "Unknown error"
+            raise RuntimeError(f"Peer error: [{code}] {message}")
+
+    return b''.join(chunks)
 
 
 def extract_effective_payload(
@@ -579,18 +630,15 @@ class PluginRuntime:
         """Create a new plugin runtime with manifest JSON string."""
         return cls(manifest_json.encode('utf-8'))
 
-    def register(self, cap_urn: str, handler: Callable[[Any, StreamEmitter, PeerInvoker], bytes]) -> None:
-        """Register a handler for a cap URN.
+    def register(self, cap_urn: str, handler: Callable[[Any, StreamEmitter, PeerInvoker], None]) -> None:
+        """Register a handler for a cap URN with automatic JSON deserialization.
 
         The handler receives:
-        - The request payload deserialized from JSON
+        - Deserialized JSON request object
         - An emitter for streaming output
         - A peer invoker for calling caps on the host
 
-        It returns the final response payload bytes.
-
-        Chunks emitted by the handler are written immediately to stdout.
-        This is essential for progress updates and real-time token streaming.
+        Handler must emit all output via emitter (no return value).
 
         **Thread safety**: Handlers run in separate threads, so they must be
         thread-safe. The emitter and peer invoker are thread-safe and can be used freely.
@@ -599,22 +647,31 @@ class PluginRuntime:
         This is useful for sandboxed plugins that need to delegate operations
         (like network access) to the host.
         """
-        def wrapper(payload: bytes, emitter: StreamEmitter, peer: PeerInvoker) -> bytes:
+        def wrapper(frames: queue.Queue, emitter: StreamEmitter, peer: PeerInvoker) -> None:
+            # Collect first argument's payload from frame stream
+            # For simplified register() API, we assume single JSON argument
+            payload_chunks = []
+            for frame in iter(frames.get, None):
+                if frame.frame_type == FrameType.CHUNK and frame.payload:
+                    payload_chunks.append(frame.payload)
+
+            payload = b''.join(payload_chunks)
+
             # Deserialize request from payload bytes (JSON format)
             try:
                 request = json.loads(payload)
             except Exception as e:
                 raise DeserializeError(f"Failed to parse request: {e}")
 
-            return handler(request, emitter, peer)
+            handler(request, emitter, peer)
 
         self.handlers[cap_urn] = wrapper
 
     def register_raw(self, cap_urn: str, handler: HandlerFn) -> None:
-        """Register a raw handler that works with bytes directly.
+        """Register a raw handler that receives bare Frame objects.
 
-        Use this when you need full control over serialization.
-        The handler receives the emitter and peer invoker in addition to the raw payload.
+        Use this when you need full control over frame processing.
+        The handler receives a queue of Frame objects, emitter, and peer invoker.
         """
         self.handlers[cap_urn] = handler
 
@@ -717,33 +774,36 @@ class PluginRuntime:
         if handler is None:
             raise NoHandlerError(f"No handler registered for cap '{cap.urn_string()}'")
 
-        # Build arguments from CLI and convert to synthetic streams
+        # Build arguments from CLI
         cli_args = args[2:]
         arguments = self.build_arguments_from_cli(cap, cli_args)
-        synthetic_streams = [
-            (f"arg-{i}", PendingStream(media_urn=arg.media_urn, chunks=[arg.value], complete=True))
-            for i, arg in enumerate(arguments)
-        ]
 
-        # Extract effective payload from synthetic streams
-        payload = extract_effective_payload(
-            synthetic_streams,
-            cap.urn_string()
-        )
+        # Create Frame sequence for handler: STREAM_START → CHUNK → STREAM_END → END
+        request_id = MessageId(0)  # CLI mode uses ID 0
+        frames = queue.Queue()
+
+        for i, arg in enumerate(arguments):
+            stream_id = f"arg-{i}"
+            # STREAM_START
+            frames.put(Frame.stream_start(request_id, stream_id, arg.media_urn))
+
+            # CHUNK (single chunk for each arg in CLI mode)
+            frames.put(Frame.chunk(request_id, stream_id, 0, arg.value))
+
+            # STREAM_END
+            frames.put(Frame.stream_end(request_id, stream_id))
+
+        # END
+        frames.put(Frame.end(request_id, None))
+        frames.put(None)  # Signal end of stream
 
         # Create CLI-mode emitter and no-op peer invoker
         emitter = CliStreamEmitter()
         peer = NoPeerInvoker()
 
-        # Invoke handler
+        # Invoke handler - handler receives Frame sequence
         try:
-            result = handler(payload, emitter, peer)
-
-            # Output final response if not empty
-            if result:
-                sys.stdout.buffer.write(result)
-                sys.stdout.buffer.write(b'\n')
-                sys.stdout.buffer.flush()
+            handler(frames, emitter, peer)
         except Exception as e:
             # Output error as JSON to stderr
             error_json = {
@@ -922,12 +982,12 @@ class PluginRuntime:
                         continue  # Wait for more chunks or STREAM_END
 
                 # Not an incoming request chunk - must be a peer response chunk
+                # Forward bare Frame to handler's queue
                 frame_id_str = frame.id.to_string()
                 with pending_lock:
                     if frame_id_str in pending_peer_requests:
                         pending_req = pending_peer_requests[frame_id_str]
-                        payload = frame.payload if frame.payload is not None else b""
-                        pending_req.queue.put(("ok", payload))
+                        pending_req.queue.put(frame)
 
             elif frame.frame_type == FrameType.END:
                 # Protocol v2: END marks the end of all streams for this request
@@ -972,12 +1032,24 @@ class PluginRuntime:
                         emitter = ThreadSafeEmitter(writer, request_id, response_stream_id, "media:bytes", writer_lock, max_chunk)
                         peer_invoker = PeerInvokerImpl(writer, writer_lock, pending_peer_requests, max_chunk)
 
-                        # Extract effective payload from streams
+                        # Create queue and populate with request frames
+                        frames = queue.Queue()
                         try:
-                            payload = extract_effective_payload(
-                                streams_snapshot,
-                                cap_urn_clone
-                            )
+                            # Convert streams to Frame sequence: STREAM_START → CHUNK → STREAM_END → END
+                            for stream_id, stream in streams_snapshot:
+                                # STREAM_START
+                                frames.put(Frame.stream_start(request_id, stream_id, stream.media_urn))
+
+                                # CHUNKs
+                                for seq, chunk_data in enumerate(stream.chunks):
+                                    frames.put(Frame.chunk(request_id, stream_id, seq, chunk_data))
+
+                                # STREAM_END
+                                frames.put(Frame.stream_end(request_id, stream_id))
+
+                            # END
+                            frames.put(Frame.end(request_id, None))
+                            frames.put(None)  # Signal end of stream
                         except Exception as e:
                             err_frame = Frame.err(request_id, "PAYLOAD_ERROR", str(e))
                             with writer_lock:
@@ -987,13 +1059,9 @@ class PluginRuntime:
                                     print(f"[PluginRuntime] Failed to write error response: {write_err}", file=sys.stderr)
                             return
 
-                        # Execute handler — response emitted via emitter, finalized at end
+                        # Execute handler — receives bare Frame objects
                         try:
-                            result = handler(payload, emitter, peer_invoker)
-
-                            # Emit handler's return value through the emitter
-                            if result:
-                                emitter.emit_bytes(result)
+                            handler(frames, emitter, peer_invoker)
 
                             # Finalize: STREAM_END + END
                             emitter.finalize()
@@ -1012,12 +1080,14 @@ class PluginRuntime:
                     continue
 
                 # Not an incoming request end - must be a peer response end
+                # Forward bare Frame to handler's queue and close channel
                 frame_id_str = frame.id.to_string()
                 with pending_lock:
                     if frame_id_str in pending_peer_requests:
                         pending_req = pending_peer_requests[frame_id_str]
-                        payload = frame.payload if frame.payload is not None else b""
-                        pending_req.queue.put(("end", payload))
+                        pending_req.ended = True
+                        pending_req.queue.put(frame)
+                        pending_req.queue.put(None)  # Signal end of stream
                         del pending_peer_requests[frame_id_str]
 
             elif frame.frame_type == FrameType.STREAM_START:
@@ -1043,6 +1113,7 @@ class PluginRuntime:
                 stream_id = frame.stream_id
                 media_urn = frame.media_urn
 
+                # Check if this is for an incoming request (plugin receiving from host)
                 with pending_incoming_lock:
                     frame_id_str = frame.id.to_string()
                     if frame_id_str in pending_incoming:
@@ -1077,8 +1148,14 @@ class PluginRuntime:
                                 chunks=[],
                                 complete=False
                             )))
-                    else:
-                        print(f"[PluginRuntime] STREAM_START for unknown request_id: {frame.id}", file=sys.stderr)
+                        continue
+
+                # Not an incoming request - must be a peer response stream start
+                # Forward bare Frame to handler's queue
+                with pending_lock:
+                    if frame_id_str in pending_peer_requests:
+                        pending_req = pending_peer_requests[frame_id_str]
+                        pending_req.queue.put(frame)
 
             elif frame.frame_type == FrameType.STREAM_END:
                 # Protocol v2: A stream has ended for a request
@@ -1093,6 +1170,7 @@ class PluginRuntime:
 
                 stream_id = frame.stream_id
 
+                # Check if this is for an incoming request (plugin receiving from host)
                 with pending_incoming_lock:
                     frame_id_str = frame.id.to_string()
                     if frame_id_str in pending_incoming:
@@ -1114,18 +1192,25 @@ class PluginRuntime:
                                     writer.write(err_frame)
                                 except Exception:
                                     pass
-                    else:
-                        print(f"[PluginRuntime] STREAM_END for unknown request_id: {frame.id}", file=sys.stderr)
+                        continue
+
+                # Not an incoming request - must be a peer response stream end
+                # Forward bare Frame to handler's queue
+                with pending_lock:
+                    if frame_id_str in pending_peer_requests:
+                        pending_req = pending_peer_requests[frame_id_str]
+                        pending_req.queue.put(frame)
 
             elif frame.frame_type == FrameType.ERR:
                 # Error frame from host - could be response to peer request
+                # Forward bare Frame to handler's queue and close channel
                 frame_id_str = frame.id.to_string()
                 with pending_lock:
                     if frame_id_str in pending_peer_requests:
                         pending_req = pending_peer_requests[frame_id_str]
-                        code = frame.error_code() or "UNKNOWN"
-                        message = frame.error_message() or "Unknown error"
-                        pending_req.queue.put(("error", f"[{code}] {message}"))
+                        pending_req.ended = True
+                        pending_req.queue.put(frame)
+                        pending_req.queue.put(None)  # Signal end of stream
                         del pending_peer_requests[frame_id_str]
 
             elif frame.frame_type == FrameType.LOG:

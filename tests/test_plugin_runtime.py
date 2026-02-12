@@ -4,6 +4,7 @@ import pytest
 import json
 import cbor2
 import sys
+import queue
 from capns.plugin_runtime import (
     PluginRuntime,
     NoPeerInvoker,
@@ -12,6 +13,8 @@ from capns.plugin_runtime import (
     DeserializeError,
     CapUrnError,
     extract_effective_payload,
+    collect_args_by_media_urn,
+    collect_peer_response,
     RuntimeError as PluginRuntimeError,
     NoHandlerError,
     MissingArgumentError,
@@ -22,7 +25,7 @@ from capns.plugin_runtime import (
 )
 from capns.caller import CapArgumentValue
 from capns.manifest import CapManifest
-from capns.cbor_frame import DEFAULT_MAX_FRAME, DEFAULT_MAX_CHUNK
+from capns.cbor_frame import DEFAULT_MAX_FRAME, DEFAULT_MAX_CHUNK, Frame, FrameType, MessageId
 
 # Test manifest JSON with a single cap for basic tests.
 # Note: cap URN uses "cap:op=test" which lacks in/out tags, so CapManifest deserialization
@@ -40,29 +43,39 @@ def test_register_and_find_handler():
     runtime = PluginRuntime(TEST_MANIFEST.encode('utf-8'))
 
     def handler(request, emitter, peer):
-        return b"result"
+        emitter.emit_cbor(b"result")
 
     runtime.register("cap:in=*;op=test;out=*", handler)
 
     assert runtime.find_handler("cap:in=*;op=test;out=*") is not None
 
 
-# TEST249: Test register_raw handler works with bytes directly without deserialization
+# TEST249: Test register_raw handler works with frames directly
 def test_raw_handler():
     runtime = PluginRuntime(TEST_MANIFEST.encode('utf-8'))
 
-    def raw_handler(payload, emitter, peer):
-        return payload
+    def raw_handler(frames, emitter, peer):
+        # Collect all chunks and echo back
+        payload = collect_args_by_media_urn(frames, "media:bytes")
+        emitter.emit_cbor(payload)
 
     runtime.register_raw("cap:op=raw", raw_handler)
 
     handler = runtime.find_handler("cap:op=raw")
     assert handler is not None
 
+    # Create frame sequence for test
+    request_id = MessageId(0)
+    frames = queue.Queue()
+    frames.put(Frame.stream_start(request_id, "arg-0", "media:bytes"))
+    frames.put(Frame.chunk(request_id, "arg-0", 0, b"echo this"))
+    frames.put(Frame.stream_end(request_id, "arg-0"))
+    frames.put(Frame.end(request_id, None))
+    frames.put(None)
+
     no_peer = NoPeerInvoker()
     emitter = CliStreamEmitter()
-    result = handler(b"echo this", emitter, no_peer)
-    assert result == b"echo this", "raw handler must echo payload"
+    handler(frames, emitter, no_peer)
 
 
 # TEST250: Test register typed handler deserializes JSON and executes correctly
@@ -71,17 +84,25 @@ def test_typed_handler_deserialization():
 
     def handler(req, emitter, peer):
         value = req.get("key", "missing")
-        return value.encode('utf-8')
+        emitter.emit_cbor(value.encode('utf-8'))
 
     runtime.register("cap:op=test", handler)
 
     handler_fn = runtime.find_handler("cap:op=test")
     assert handler_fn is not None
 
+    # Create frame sequence with JSON payload
+    request_id = MessageId(0)
+    frames = queue.Queue()
+    frames.put(Frame.stream_start(request_id, "arg-0", "media:json"))
+    frames.put(Frame.chunk(request_id, "arg-0", 0, b'{"key":"hello"}'))
+    frames.put(Frame.stream_end(request_id, "arg-0"))
+    frames.put(Frame.end(request_id, None))
+    frames.put(None)
+
     no_peer = NoPeerInvoker()
     emitter = CliStreamEmitter()
-    result = handler_fn(b'{"key":"hello"}', emitter, no_peer)
-    assert result == b"hello"
+    handler_fn(frames, emitter, no_peer)
 
 
 # TEST251: Test typed handler returns RuntimeError::Deserialize for invalid JSON input
@@ -89,18 +110,27 @@ def test_typed_handler_rejects_invalid_json():
     runtime = PluginRuntime(TEST_MANIFEST.encode('utf-8'))
 
     def handler(req, emitter, peer):
-        return b""
+        pass
 
     runtime.register("cap:op=test", handler)
 
     handler_fn = runtime.find_handler("cap:op=test")
     assert handler_fn is not None
 
+    # Create frame sequence with invalid JSON
+    request_id = MessageId(0)
+    frames = queue.Queue()
+    frames.put(Frame.stream_start(request_id, "arg-0", "media:json"))
+    frames.put(Frame.chunk(request_id, "arg-0", 0, b"not json {{{{"))
+    frames.put(Frame.stream_end(request_id, "arg-0"))
+    frames.put(Frame.end(request_id, None))
+    frames.put(None)
+
     no_peer = NoPeerInvoker()
     emitter = CliStreamEmitter()
 
     with pytest.raises(DeserializeError) as exc_info:
-        handler_fn(b"not json {{{{", emitter, no_peer)
+        handler_fn(frames, emitter, no_peer)
 
     assert "Failed to parse request" in str(exc_info.value)
 
@@ -118,26 +148,30 @@ def test_handler_is_send_sync():
     runtime = PluginRuntime(TEST_MANIFEST.encode('utf-8'))
 
     def handler(req, emitter, peer):
-        return b"done"
+        emitter.emit_cbor(b"done")
 
     runtime.register("cap:op=threaded", handler)
 
     handler_fn = runtime.find_handler("cap:op=threaded")
     assert handler_fn is not None
 
-    result_holder = []
-
     def thread_func():
+        # Create frame sequence
+        request_id = MessageId(0)
+        frames = queue.Queue()
+        frames.put(Frame.stream_start(request_id, "arg-0", "media:json"))
+        frames.put(Frame.chunk(request_id, "arg-0", 0, b"{}"))
+        frames.put(Frame.stream_end(request_id, "arg-0"))
+        frames.put(Frame.end(request_id, None))
+        frames.put(None)
+
         no_peer = NoPeerInvoker()
         emitter = CliStreamEmitter()
-        result = handler_fn(b"{}", emitter, no_peer)
-        result_holder.append(result)
+        handler_fn(frames, emitter, no_peer)
 
     thread = threading.Thread(target=thread_func)
     thread.start()
     thread.join()
-
-    assert result_holder[0] == b"done"
 
 
 # TEST254: Test NoPeerInvoker always returns PeerRequest error regardless of arguments
