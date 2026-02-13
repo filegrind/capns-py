@@ -188,6 +188,21 @@ class Limits:
         )
 
 
+def compute_checksum(data: bytes) -> int:
+    """Compute FNV-1a 64-bit checksum of bytes.
+
+    This is a simple, fast hash function suitable for detecting transmission errors.
+    """
+    FNV_OFFSET_BASIS = 0xcbf29ce484222325
+    FNV_PRIME = 0x100000001b3
+
+    hash_value = FNV_OFFSET_BASIS
+    for byte in data:
+        hash_value ^= byte
+        hash_value = (hash_value * FNV_PRIME) & 0xFFFFFFFFFFFFFFFF  # Keep 64-bit
+    return hash_value
+
+
 class Frame:
     """A CBOR protocol frame"""
 
@@ -207,6 +222,9 @@ class Frame:
         stream_id: Optional[str] = None,
         media_urn: Optional[str] = None,
         routing_id: Optional[MessageId] = None,
+        index: Optional[int] = None,
+        chunk_count: Optional[int] = None,
+        checksum: Optional[int] = None,
     ):
         """Create a new frame
 
@@ -225,6 +243,9 @@ class Frame:
             stream_id: Stream identifier for multiplexing
             media_urn: Media URN for stream typing
             routing_id: Routing ID assigned by RelaySwitch (separates logical ID from routing)
+            index: Chunk sequence index within stream (CHUNK frames only, starts at 0)
+            chunk_count: Total chunk count (STREAM_END frames only, by source's reckoning)
+            checksum: FNV-1a checksum of payload (CHUNK frames only)
         """
         self.version = version
         self.frame_type = frame_type
@@ -240,6 +261,9 @@ class Frame:
         self.stream_id = stream_id
         self.media_urn = media_urn
         self.routing_id = routing_id
+        self.index = index
+        self.chunk_count = chunk_count
+        self.checksum = checksum
 
     @classmethod
     def new(cls, frame_type: FrameType, id: MessageId) -> "Frame":
@@ -285,12 +309,14 @@ class Frame:
         return frame
 
     @classmethod
-    def chunk(cls, req_id: MessageId, stream_id: str, seq: int, payload: bytes) -> "Frame":
+    def chunk(cls, req_id: MessageId, stream_id: str, seq: int, payload: bytes, index: int, checksum: int) -> "Frame":
         """Create a CHUNK frame for streaming (Protocol v2: stream_id required)"""
         frame = cls.new(FrameType.CHUNK, req_id)
         frame.stream_id = stream_id
         frame.seq = seq
         frame.payload = payload
+        frame.index = index
+        frame.checksum = checksum
         return frame
 
     @classmethod
@@ -370,16 +396,18 @@ class Frame:
         return frame
 
     @classmethod
-    def stream_end(cls, req_id: MessageId, stream_id: str) -> "Frame":
+    def stream_end(cls, req_id: MessageId, stream_id: str, chunk_count: int) -> "Frame":
         """Create a STREAM_END frame to mark completion of a specific stream.
         After this, any CHUNK for this stream_id is a fatal protocol error.
 
         Args:
             req_id: Request message ID this stream belongs to
             stream_id: Identifier of the stream that is ending
+            chunk_count: Total number of chunks sent in this stream (by source's reckoning)
         """
         frame = cls.new(FrameType.STREAM_END, req_id)
         frame.stream_id = stream_id
+        frame.chunk_count = chunk_count
         return frame
 
     @classmethod
@@ -537,3 +565,6 @@ class Keys:
     STREAM_ID = 11
     MEDIA_URN = 12
     ROUTING_ID = 13
+    INDEX = 14
+    CHUNK_COUNT = 15
+    CHECKSUM = 16
