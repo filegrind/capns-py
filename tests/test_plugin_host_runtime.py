@@ -1,11 +1,11 @@
-"""Tests for async_plugin_host module
+"""Tests for plugin_host_runtime module
 
-Tests for AsyncPluginHost, ResponseChunk, PluginResponse, and error types.
+Tests for PluginHostRuntime, ResponseChunk, PluginResponse, and error types.
 """
 
 import pytest
 
-from capns.async_plugin_host import (
+from capns.plugin_host_runtime import (
     ResponseChunk,
     PluginResponse,
     AsyncHostError,

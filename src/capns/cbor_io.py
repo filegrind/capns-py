@@ -144,6 +144,9 @@ def encode_frame(frame: Frame) -> bytes:
     if frame.media_urn is not None:
         frame_map[Keys.MEDIA_URN] = frame.media_urn
 
+    if frame.routing_id is not None:
+        frame_map[Keys.ROUTING_ID] = frame.routing_id.to_cbor()
+
     try:
         return cbor2.dumps(frame_map)
     except Exception as e:
@@ -222,6 +225,9 @@ def decode_frame(data: bytes) -> Frame:
     stream_id = lookup.get(Keys.STREAM_ID)
     media_urn = lookup.get(Keys.MEDIA_URN)
 
+    routing_id_cbor = lookup.get(Keys.ROUTING_ID)
+    routing_id = MessageId.from_cbor(routing_id_cbor) if routing_id_cbor is not None else None
+
     return Frame(
         frame_type=frame_type,
         id=id_obj,
@@ -236,6 +242,7 @@ def decode_frame(data: bytes) -> Frame:
         cap=cap,
         stream_id=stream_id,
         media_urn=media_urn,
+        routing_id=routing_id,
     )
 
 
@@ -555,7 +562,7 @@ def handshake_accept(
 
 
 # =============================================================================
-# Async I/O - for AsyncPluginHost
+# Async I/O - for PluginHostRuntime
 # =============================================================================
 
 

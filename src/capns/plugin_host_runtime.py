@@ -12,11 +12,11 @@ plugin processes. It handles:
 - Plugin death detection with pending request ERR
 - Aggregate capability advertisement
 
-This matches the Rust AsyncPluginHost and Go PluginHost architectures exactly.
+This matches the Rust PluginHostRuntime and Go PluginHost architectures exactly.
 
 Usage:
 ```python
-from capns.async_plugin_host import PluginHost
+from capns.plugin_host_runtime import PluginHost
 
 host = PluginHost()
 host.register_plugin("/path/to/plugin", ["cap:op=convert"])
@@ -277,7 +277,7 @@ class PluginHost:
     plugin by cap URN. Continuation frames (STREAM_START, CHUNK,
     STREAM_END, END) are routed by request ID.
 
-    Matches the Rust AsyncPluginHost and Go PluginHost architectures.
+    Matches the Rust PluginHostRuntime and Go PluginHost architectures.
     """
 
     def __init__(self):

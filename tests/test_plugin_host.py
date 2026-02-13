@@ -16,7 +16,7 @@ import time
 
 import pytest
 
-from capns.async_plugin_host import PluginHost
+from capns.plugin_host_runtime import PluginHost
 from capns.cbor_frame import Frame, FrameType, Limits, MessageId
 from capns.cbor_io import (
     FrameReader,

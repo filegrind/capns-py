@@ -206,6 +206,7 @@ class Frame:
         cap: Optional[str] = None,
         stream_id: Optional[str] = None,
         media_urn: Optional[str] = None,
+        routing_id: Optional[MessageId] = None,
     ):
         """Create a new frame
 
@@ -223,6 +224,7 @@ class Frame:
             cap: Cap URN (for requests)
             stream_id: Stream identifier for multiplexing
             media_urn: Media URN for stream typing
+            routing_id: Routing ID assigned by RelaySwitch (separates logical ID from routing)
         """
         self.version = version
         self.frame_type = frame_type
@@ -237,6 +239,7 @@ class Frame:
         self.cap = cap
         self.stream_id = stream_id
         self.media_urn = media_urn
+        self.routing_id = routing_id
 
     @classmethod
     def new(cls, frame_type: FrameType, id: MessageId) -> "Frame":
@@ -533,3 +536,4 @@ class Keys:
     CAP = 10
     STREAM_ID = 11
     MEDIA_URN = 12
+    ROUTING_ID = 13
