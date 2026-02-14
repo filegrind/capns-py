@@ -55,7 +55,7 @@ from capns.media_urn import (
 
 # Standard echo capability URN
 # Accepts any media type as input and outputs any media type
-CAP_ECHO = "cap:in=media:;out=media:"
+CAP_IDENTITY = "cap:in=media:;out=media:"
 
 
 # =============================================================================
