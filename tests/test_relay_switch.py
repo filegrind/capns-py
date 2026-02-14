@@ -38,7 +38,7 @@ def test_426_single_master_req_response():
         reader = FrameReader(slave_read.makefile('rb'))
         writer = FrameWriter(slave_write.makefile('wb'))
 
-        manifest = {"capabilities": ['cap:in="media:void";op=echo;out="media:void"']}
+        manifest = {"capabilities": ['cap:in=media:;out=media:']}
         send_notify(writer, manifest, Limits.default())
         done.set()
 
@@ -59,7 +59,7 @@ def test_426_single_master_req_response():
     # Send REQ
     req = Frame.req(
         MessageId(1),
-        'cap:in="media:void";op=echo;out="media:void"',
+        'cap:in=media:;out=media:',
         bytes([1, 2, 3]),
         "text/plain"
     )
@@ -90,7 +90,7 @@ def test_427_multi_master_cap_routing():
         reader = FrameReader(slave_read1.makefile('rb'))
         writer = FrameWriter(slave_write1.makefile('wb'))
 
-        manifest = {"capabilities": ['cap:in="media:void";op=echo;out="media:void"']}
+        manifest = {"capabilities": ['cap:in=media:;out=media:']}
         send_notify(writer, manifest, Limits.default())
         done1.set()
 
@@ -133,7 +133,7 @@ def test_427_multi_master_cap_routing():
     # Send REQ for echo cap → routes to master 1
     req1 = Frame.req(
         MessageId(1),
-        'cap:in="media:void";op=echo;out="media:void"',
+        'cap:in=media:;out=media:',
         bytes(),
         "text/plain"
     )
@@ -166,7 +166,7 @@ def test_428_unknown_cap_returns_error():
     def slave_thread():
         writer = FrameWriter(slave_write.makefile('wb'))
 
-        manifest = {"capabilities": ['cap:in="media:void";op=echo;out="media:void"']}
+        manifest = {"capabilities": ['cap:in=media:;out=media:']}
         send_notify(writer, manifest, Limits.default())
         done.set()
 
@@ -202,7 +202,7 @@ def test_429_find_master_for_cap():
 
     def slave1_thread():
         writer = FrameWriter(slave_write1.makefile('wb'))
-        manifest = {"capabilities": ['cap:in="media:void";op=echo;out="media:void"']}
+        manifest = {"capabilities": ['cap:in=media:;out=media:']}
         send_notify(writer, manifest, Limits.default())
         done1.set()
 
@@ -224,7 +224,7 @@ def test_429_find_master_for_cap():
     ])
 
     # Verify routing
-    assert switch._find_master_for_cap('cap:in="media:void";op=echo;out="media:void"') == 0
+    assert switch._find_master_for_cap('cap:in=media:;out=media:') == 0
     assert switch._find_master_for_cap('cap:in="media:void";op=double;out="media:void"') == 1
     assert switch._find_master_for_cap('cap:in="media:void";op=unknown;out="media:void"') is None
 
@@ -246,7 +246,7 @@ def test_430_tie_breaking_same_cap_multiple_masters():
     done1 = threading.Event()
     done2 = threading.Event()
 
-    same_cap = 'cap:in="media:void";op=echo;out="media:void"'
+    same_cap = 'cap:in=media:;out=media:'
 
     # Spawn slave 1
     def slave1_thread():
@@ -392,7 +392,7 @@ def test_433_capability_aggregation_deduplicates():
         writer = FrameWriter(slave_write1.makefile('wb'))
         manifest = {
             "capabilities": [
-                'cap:in="media:void";op=echo;out="media:void"',
+                'cap:in=media:;out=media:',
                 'cap:in="media:void";op=double;out="media:void"'
             ]
         }
@@ -403,7 +403,7 @@ def test_433_capability_aggregation_deduplicates():
         writer = FrameWriter(slave_write2.makefile('wb'))
         manifest = {
             "capabilities": [
-                'cap:in="media:void";op=echo;out="media:void"',  # Duplicate
+                'cap:in=media:;out=media:',  # Duplicate
                 'cap:in="media:void";op=triple;out="media:void"'
             ]
         }
@@ -427,7 +427,7 @@ def test_433_capability_aggregation_deduplicates():
     # Should have 3 unique caps (echo appears twice but deduplicated)
     assert len(cap_list) == 3
     assert 'cap:in="media:void";op=double;out="media:void"' in cap_list
-    assert 'cap:in="media:void";op=echo;out="media:void"' in cap_list
+    assert 'cap:in=media:;out=media:' in cap_list
     assert 'cap:in="media:void";op=triple;out="media:void"' in cap_list
 
 

@@ -98,7 +98,7 @@ def test_request_response_simple():
         frame = reader.read()
         assert frame is not None
         assert frame.frame_type == FrameType.REQ
-        assert frame.cap == "cap:op=echo"
+        assert frame.cap == "cap:in=media:;out=media:"
         assert frame.payload == b"hello"
 
         writer.write(Frame.end(frame.id, b"hello back"))
@@ -112,7 +112,7 @@ def test_request_response_simple():
     # handshake already sets limits on reader/writer
 
     request_id = MessageId.new_uuid()
-    writer.write(Frame.req(request_id, "cap:op=echo", b"hello", "application/json"))
+    writer.write(Frame.req(request_id, "cap:in=media:;out=media:", b"hello", "application/json"))
 
     response = reader.read()
     assert response is not None

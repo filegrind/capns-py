@@ -132,7 +132,7 @@ def test_req_triggers_spawn():
 
 # TEST416: AttachPlugin performs HELLO handshake, extracts manifest, updates capabilities
 def test_attach_plugin_handshake():
-    manifest = '{"name":"Test","version":"1.0","caps":[{"urn":"cap:op=echo"}]}'
+    manifest = '{"name":"Test","version":"1.0","caps":[{"urn":"cap:in=media:;out=media:"}]}'
     hr, hw, pr, pw, hs, ps = make_conn()
 
     def plugin():
@@ -148,11 +148,11 @@ def test_attach_plugin_handshake():
     assert idx == 0
     with host._lock:
         assert host._plugins[0].running
-        assert host._plugins[0].caps == ["cap:op=echo"]
+        assert host._plugins[0].caps == ["cap:in=media:;out=media:"]
 
     caps = host.capabilities()
     assert caps is not None
-    assert b"cap:op=echo" in caps
+    assert b"cap:in=media:;out=media:" in caps
     cleanup(hs, ps)
     t.join(timeout=5)
 
