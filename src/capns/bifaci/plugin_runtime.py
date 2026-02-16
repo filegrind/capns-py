@@ -660,7 +660,7 @@ def extract_effective_payload(
             try:
                 arg_urn = MediaUrn.from_string(stream.media_urn)
                 fwd = arg_urn.conforms_to(expected_media_urn)
-                rev = expected_media_urn.conforms_to(arg_urn)
+                rev = expected_media_urn.accepts(arg_urn)
                 if fwd or rev:
                     return stream_data
             except Exception:
