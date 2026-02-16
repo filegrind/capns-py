@@ -13,6 +13,7 @@ from capns.cbor_frame import (
     PROTOCOL_VERSION,
     DEFAULT_MAX_FRAME,
     DEFAULT_MAX_CHUNK,
+    compute_checksum,
 )
 
 
