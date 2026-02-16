@@ -118,6 +118,20 @@ class CapUrn:
         in_urn = cls._process_direction_tag(tagged, "in")
         out_urn = cls._process_direction_tag(tagged, "out")
 
+        # Validate that in and out specs are valid media URNs (or wildcard "media:")
+        # After processing, "media:" is the wildcard (not "*")
+        if in_urn != "media:":
+            try:
+                MediaUrn.from_string(in_urn)
+            except MediaUrnError as e:
+                raise CapUrnError(f"Invalid media URN for in spec '{in_urn}': {e}") from e
+
+        if out_urn != "media:":
+            try:
+                MediaUrn.from_string(out_urn)
+            except MediaUrnError as e:
+                raise CapUrnError(f"Invalid media URN for out spec '{out_urn}': {e}") from e
+
         # Collect remaining tags (excluding in/out)
         tags = {k: v for k, v in tagged.tags.items() if k not in ("in", "out")}
 
@@ -334,14 +348,14 @@ class CapUrn:
     def with_wildcard_tag(self, key: str) -> "CapUrn":
         """Create a wildcard version by replacing specific values with wildcards
 
-        For 'in' or 'out', sets the corresponding direction spec to wildcard ("media:").
+        For 'in' or 'out', sets the corresponding direction spec to wildcard.
         """
         key_lower = key.lower()
 
         if key_lower == "in":
-            return CapUrn("media:", self.out_urn, self.tags)
+            return CapUrn("*", self.out_urn, self.tags)
         elif key_lower == "out":
-            return CapUrn(self.in_urn, "media:", self.tags)
+            return CapUrn(self.in_urn, "*", self.tags)
         else:
             if key_lower in self.tags:
                 new_tags = self.tags.copy()
@@ -409,6 +423,35 @@ class CapUrn:
         return hash((self.in_urn, self.out_urn, tuple(sorted(self.tags.items()))))
 
 
+class CapMatcher:
+    """Cap matching and selection utilities"""
+
+    @staticmethod
+    def find_best_match(caps: List[CapUrn], request: CapUrn) -> Optional[CapUrn]:
+        """Find the most specific cap that accepts a request"""
+        matches = [cap for cap in caps if request.accepts(cap)]
+        if not matches:
+            return None
+        return max(matches, key=lambda cap: cap.specificity())
+
+    @staticmethod
+    def find_all_matches(caps: List[CapUrn], request: CapUrn) -> List[CapUrn]:
+        """Find all caps that match a request, sorted by specificity (most specific first)"""
+        matches = [cap for cap in caps if request.accepts(cap)]
+        # Sort by specificity (most specific first)
+        matches.sort(key=lambda cap: cap.specificity(), reverse=True)
+        return matches
+
+    @staticmethod
+    def are_compatible(caps1: List[CapUrn], caps2: List[CapUrn]) -> bool:
+        """Check if two cap sets overlap (any pair where one accepts the other)"""
+        return any(
+            c1.accepts(c2) or c2.accepts(c1)
+            for c1 in caps1
+            for c2 in caps2
+        )
+
+
 class CapUrnBuilder:
     """Builder for creating cap URNs fluently"""
 
@@ -436,6 +479,14 @@ class CapUrnBuilder:
         if not value:
             raise CapUrnError(f"Empty value for key '{key}' (use '*' for wildcard)")
         self._tags[key.lower()] = value
+        return self
+
+    def solo_tag(self, key: str) -> "CapUrnBuilder":
+        """Add a tag with wildcard value ("*") without requiring explicit value parameter"""
+        key_lower = key.lower()
+        if key_lower in ("in", "out"):
+            return self
+        self._tags[key_lower] = "*"
         return self
 
     def build(self) -> CapUrn:

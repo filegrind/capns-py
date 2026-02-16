@@ -722,11 +722,17 @@ class PluginRuntime:
         except Exception:
             self.manifest = None
 
+        # Auto-register standard handlers
+        self._register_standard_caps()
+
     @classmethod
     def with_manifest(cls, manifest: CapManifest):
         """Create a new plugin runtime with a pre-built CapManifest.
         This is the preferred method as it ensures the manifest is valid.
+
+        Auto-ensures CAP_IDENTITY is present in the manifest.
         """
+        manifest = manifest.ensure_identity()
         manifest_data = json.dumps(manifest.to_dict()).encode('utf-8')
         instance = cls(manifest_data)
         instance.manifest = manifest
@@ -736,6 +742,42 @@ class PluginRuntime:
     def with_manifest_json(cls, manifest_json: str):
         """Create a new plugin runtime with manifest JSON string."""
         return cls(manifest_json.encode('utf-8'))
+
+    def _register_standard_caps(self) -> None:
+        """Register the standard identity and discard handlers.
+
+        Plugin authors can override either by calling register_raw() after construction.
+        """
+        from capns.standard.caps import CAP_IDENTITY, CAP_DISCARD
+
+        # Identity handler — pure passthrough. Forwards all input chunks to output.
+        def identity_handler(frames: queue.Queue, emitter: StreamEmitter, peer: PeerInvoker) -> None:
+            while True:
+                frame = frames.get()
+                if frame is None:
+                    break
+                if frame.frame_type == FrameType.CHUNK:
+                    if frame.payload:
+                        # Forward chunk as-is
+                        import cbor2
+                        value = cbor2.loads(frame.payload)
+                        emitter.emit_cbor(value)
+                elif frame.frame_type == FrameType.END:
+                    break
+
+        # Discard handler — terminal morphism. Drains all input, produces nothing.
+        def discard_handler(frames: queue.Queue, emitter: StreamEmitter, peer: PeerInvoker) -> None:
+            while True:
+                frame = frames.get()
+                if frame is None or frame.frame_type == FrameType.END:
+                    break
+
+        # Auto-register if not already present
+        if CAP_IDENTITY not in self.handlers:
+            self.handlers[CAP_IDENTITY] = identity_handler
+
+        if CAP_DISCARD not in self.handlers:
+            self.handlers[CAP_DISCARD] = discard_handler
 
     def register(self, cap_urn: str, handler: Callable[[Any, StreamEmitter, PeerInvoker], None]) -> None:
         """Register a handler for a cap URN with automatic JSON deserialization.

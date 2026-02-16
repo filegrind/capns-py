@@ -112,6 +112,16 @@ class MessageId:
         except ValueError:
             return None
 
+    @classmethod
+    def from_cbor(cls, value) -> "MessageId":
+        """Create MessageId from CBOR value (bytes for UUID, int for Uint)"""
+        if isinstance(value, bytes):
+            return cls(value)
+        elif isinstance(value, int):
+            return cls(value)
+        else:
+            raise TypeError(f"CBOR value must be bytes or int for MessageId, got {type(value)}")
+
     def to_uuid_string(self) -> Optional[str]:
         """Convert to UUID string if this is a UUID"""
         if self.uuid_bytes is not None:

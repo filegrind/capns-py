@@ -79,3 +79,37 @@ class CapManifest:
         """Parse from JSON string"""
         data = json.loads(json_str)
         return cls.from_dict(data)
+
+    def validate(self) -> None:
+        """Validate that this manifest has CAP_IDENTITY.
+
+        Raises ValueError if identity cap is missing.
+        """
+        from capns.urn.cap_urn import CapUrn
+        from capns.standard.caps import CAP_IDENTITY
+
+        identity_urn = CapUrn.from_string(CAP_IDENTITY)
+        has_identity = any(identity_urn.conforms_to(cap.urn) for cap in self.caps)
+        if not has_identity:
+            raise ValueError(f"Manifest missing required CAP_IDENTITY ({CAP_IDENTITY})")
+
+    def ensure_identity(self) -> "CapManifest":
+        """Ensure CAP_IDENTITY is present in this manifest. Adds it if missing.
+
+        Returns self for method chaining.
+        """
+        from capns.urn.cap_urn import CapUrn
+        from capns.standard.caps import CAP_IDENTITY
+
+        identity_urn = CapUrn.from_string(CAP_IDENTITY)
+        has_identity = any(identity_urn.conforms_to(cap.urn) for cap in self.caps)
+
+        if not has_identity:
+            identity_cap = Cap(
+                urn=identity_urn,
+                title="Identity",
+                command="identity"
+            )
+            self.caps.insert(0, identity_cap)
+
+        return self

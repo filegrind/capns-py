@@ -53,9 +53,14 @@ from capns.urn.media_urn import (
 # STANDARD CAP URN CONSTANTS
 # =============================================================================
 
-# Standard echo capability URN
-# Accepts any media type as input and outputs any media type
-CAP_IDENTITY = "cap:in=media:;out=media:"
+# Identity capability — the categorical identity morphism. MANDATORY in every capset.
+# Accepts any media type as input and outputs any media type.
+CAP_IDENTITY = "cap:"
+
+# Discard capability — the terminal morphism. Standard, NOT mandatory.
+# Accepts any media type as input and produces void output.
+# The capns lib provides a default implementation; plugins may override.
+CAP_DISCARD = "cap:in=media:;out=media:void"
 
 
 # =============================================================================

@@ -303,13 +303,64 @@ class MediaUrn:
         tag_val = self._urn.get_tag("textable")
         return tag_val is not None
 
+    def is_image(self) -> bool:
+        """Check if this represents image data.
+        Returns true if the "image" marker tag is present.
+        """
+        return self._urn.get_tag("image") is not None
+
+    def is_audio(self) -> bool:
+        """Check if this represents audio data.
+        Returns true if the "audio" marker tag is present.
+        """
+        return self._urn.get_tag("audio") is not None
+
+    def is_video(self) -> bool:
+        """Check if this represents video data.
+        Returns true if the "video" marker tag is present.
+        """
+        return self._urn.get_tag("video") is not None
+
+    def is_numeric(self) -> bool:
+        """Check if this represents numeric data.
+        Returns true if the "numeric" marker tag is present.
+        """
+        return self._urn.get_tag("numeric") is not None
+
+    def is_bool(self) -> bool:
+        """Check if this represents boolean data.
+        Returns true if the "bool" marker tag is present.
+        """
+        return self._urn.get_tag("bool") is not None
+
     def is_void(self) -> bool:
-        """Check if this media URN represents void (no data)"""
-        # Check for 'void' tag or type=void
-        void_tag = self._urn.get_tag("void")
-        if void_tag is not None:
-            return True
-        return self._urn.has_tag("type", "void")
+        """Check if this represents a void (no data) type"""
+        # Check for "void" marker tag
+        return "void" in self._urn.tags
+
+    def is_file_path(self) -> bool:
+        """Check if this represents a file path type.
+        Returns true if the "file-path" marker tag is present.
+        """
+        return self._urn.tags.get("file-path") == "*"
+
+    def is_file_path_array(self) -> bool:
+        """Check if this represents a file path array type.
+        Returns true if the "file-path-array" marker tag is present.
+        """
+        return self._urn.tags.get("file-path-array") == "*"
+
+    def is_any_file_path(self) -> bool:
+        """Check if this represents any file path type (single or array).
+        Returns true if either "file-path" or "file-path-array" marker tag is present.
+        """
+        return self.is_file_path() or self.is_file_path_array()
+
+    def is_collection(self) -> bool:
+        """Check if this represents a collection type (folder structure).
+        Returns true if the "collection" marker tag is present.
+        """
+        return self._urn.tags.get("collection") == "*"
 
     def extension(self) -> Optional[str]:
         """Get the extension tag value if present"""
