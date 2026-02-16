@@ -260,9 +260,11 @@ def test_tag_matching():
     cap2 = CapUrn.from_string(_test_urn("op=generate;ext=pdf"))
     assert cap1.accepts(cap2)
 
-    # Subset: cap1 has extra tag, cap2 doesn't specify it -> cap1 can handle cap2
+    # cap1(op,ext) as pattern rejects cap3(op) missing ext
     cap3 = CapUrn.from_string(_test_urn("op=generate"))  # Missing ext tag
-    assert cap1.accepts(cap3)
+    assert not cap1.accepts(cap3), "Pattern rejects instance missing required tag"
+    # Routing: cap3(op) accepts cap1(op,ext) — instance has op → match
+    assert cap3.accepts(cap1), "cap3 missing ext is wildcard, accepts cap1 with ext"
 
     # Wildcard: cap has wildcard value -> can handle any value
     cap4 = CapUrn.from_string(_test_urn("op=*;ext=pdf"))

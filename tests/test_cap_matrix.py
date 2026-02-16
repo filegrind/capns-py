@@ -54,11 +54,12 @@ def test_register_and_find_cap_set():
     sets = registry.find_cap_sets(make_test_urn("op=test;basic"))
     assert len(sets) == 1
 
-    # Test subset match (request has more specific requirements)
-    sets = registry.find_cap_sets(make_test_urn("op=test;basic;model=gpt-4"))
-    assert len(sets) == 1
+    # Test no match: request has extra requirements (model=gpt-4) that registered cap doesn't satisfy
+    # Routing direction: request.accepts(registered_cap) — request pattern requires "model", cap missing it → reject
+    with pytest.raises(NoSetsFoundError):
+        registry.find_cap_sets(make_test_urn("op=test;basic;model=gpt-4"))
 
-    # Test no match
+    # Test no match: different op value
     with pytest.raises(NoSetsFoundError):
         registry.find_cap_sets(make_test_urn("op=different"))
 
@@ -78,14 +79,15 @@ def test_best_cap_set_selection():
     registry.register_cap_set("general", general_host, [general_cap])
     registry.register_cap_set("specific", specific_host, [specific_cap])
 
-    # Request should match the more specific host
-    best_host, best_cap = registry.find_best_cap_set(make_test_urn("op=generate;text;model=gpt-4;temperature=low"))
+    # Request with minimal requirements should match both, but pick the more specific one
+    # Routing: request(op=generate) accepts both caps (both have "op")
+    best_host, best_cap = registry.find_best_cap_set(make_test_urn("op=generate"))
 
-    # Verify it's the specific one (higher specificity)
+    # Verify it's the specific one (higher specificity wins)
     assert best_cap.title == "Specific Text Generation Capability"
 
-    # Both sets should match
-    all_sets = registry.find_cap_sets(make_test_urn("op=generate;text;model=gpt-4;temperature=low"))
+    # Both sets should match the minimal request
+    all_sets = registry.find_cap_sets(make_test_urn("op=generate"))
     assert len(all_sets) == 2
 
 
@@ -106,9 +108,12 @@ def test_accepts_request():
 
     registry.register_cap_set("test-host", host, [cap])
 
-    # Should accept matching capability
+    # Should accept matching capability (exact match)
     assert registry.accepts_request(make_test_urn("op=process"))
-    assert registry.accepts_request(make_test_urn("op=process;advanced"))
+
+    # Should NOT accept request with extra requirements that registered cap doesn't satisfy
+    # Routing: request(op,advanced) requires "advanced", cap(op) doesn't have it → reject
+    assert not registry.accepts_request(make_test_urn("op=process;advanced"))
 
     # Should not accept non-matching capability
     assert not registry.accepts_request(make_test_urn("op=different"))
