@@ -6,7 +6,7 @@ Tests use // TEST###: comments matching the Rust implementation for cross-tracki
 import pytest
 import json
 from dataclasses import dataclass
-from capns.response import ResponseWrapper
+from capns.cap.response import ResponseWrapper
 
 
 @dataclass

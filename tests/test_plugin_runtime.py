@@ -6,7 +6,7 @@ import cbor2
 import sys
 import queue
 import io
-from capns.plugin_runtime import (
+from capns.bifaci.plugin_runtime import (
     PluginRuntime,
     NoPeerInvoker,
     CliStreamEmitter,
@@ -24,9 +24,9 @@ from capns.plugin_runtime import (
     PeerResponseError,
     PendingStream,
 )
-from capns.caller import CapArgumentValue
-from capns.manifest import CapManifest
-from capns.cbor_frame import DEFAULT_MAX_FRAME, DEFAULT_MAX_CHUNK, Frame, FrameType, MessageId
+from capns.cap.caller import CapArgumentValue
+from capns.bifaci.manifest import CapManifest
+from capns.bifaci.frame import DEFAULT_MAX_FRAME, DEFAULT_MAX_CHUNK, Frame, FrameType, MessageId
 
 # Test manifest JSON with a single cap for basic tests.
 # Note: cap URN uses "cap:op=test" which lacks in/out tags, so CapManifest deserialization
@@ -439,8 +439,8 @@ def test_extract_effective_payload_binary_value():
 
 def create_test_cap(urn_str: str, title: str, command: str, args: list) -> 'Cap':
     """Helper function to create a Cap for tests"""
-    from capns.cap_urn import CapUrn
-    from capns.cap import Cap
+    from capns.urn.cap_urn import CapUrn
+    from capns.cap.definition import Cap
     urn = CapUrn.from_string(urn_str)
     cap = Cap(urn, title, command)
     cap.args = args
@@ -459,7 +459,7 @@ def create_test_manifest(name: str, version: str, description: str, caps: list) 
 
 # TEST336: Single file-path arg with stdin source reads file and passes bytes to handler
 def test_336_file_path_reads_file_passes_bytes(tmp_path):
-    from capns.cap import CapArg, StdinSource, PositionSource
+    from capns.cap.definition import CapArg, StdinSource, PositionSource
     import threading
 
     test_file = tmp_path / "test336_input.pdf"
@@ -518,7 +518,7 @@ def test_336_file_path_reads_file_passes_bytes(tmp_path):
 
 # TEST337: file-path arg without stdin source passes path as string (no conversion)
 def test_337_file_path_without_stdin_passes_string(tmp_path):
-    from capns.cap import CapArg, PositionSource
+    from capns.cap.definition import CapArg, PositionSource
 
     test_file = tmp_path / "test337_input.txt"
     test_file.write_bytes(b"content")
@@ -548,7 +548,7 @@ def test_337_file_path_without_stdin_passes_string(tmp_path):
 
 # TEST338: file-path arg reads file via --file CLI flag
 def test_338_file_path_via_cli_flag(tmp_path):
-    from capns.cap import CapArg, StdinSource, CliFlagSource
+    from capns.cap.definition import CapArg, StdinSource, CliFlagSource
 
     test_file = tmp_path / "test338.pdf"
     test_file.write_bytes(b"PDF via flag 338")
@@ -579,7 +579,7 @@ def test_338_file_path_via_cli_flag(tmp_path):
 
 # TEST339: file-path-array reads multiple files with glob pattern
 def test_339_file_path_array_glob_expansion(tmp_path):
-    from capns.cap import CapArg, StdinSource, PositionSource
+    from capns.cap.definition import CapArg, StdinSource, PositionSource
 
     test_dir = tmp_path / "test339"
     test_dir.mkdir()
@@ -626,8 +626,8 @@ def test_339_file_path_array_glob_expansion(tmp_path):
 
 # TEST340: File not found error provides clear message
 def test_340_file_not_found_clear_error():
-    from capns.cap import CapArg, StdinSource, PositionSource
-    from capns.plugin_runtime import IoRuntimeError
+    from capns.cap.definition import CapArg, StdinSource, PositionSource
+    from capns.bifaci.plugin_runtime import IoRuntimeError
 
     cap = create_test_cap(
         'cap:in="media:pdf;bytes";op=test;out="media:void"',
@@ -659,7 +659,7 @@ def test_340_file_not_found_clear_error():
 
 # TEST341: stdin takes precedence over file-path in source order
 def test_341_stdin_precedence_over_file_path(tmp_path):
-    from capns.cap import CapArg, StdinSource, PositionSource
+    from capns.cap.definition import CapArg, StdinSource, PositionSource
 
     test_file = tmp_path / "test341_input.txt"
     test_file.write_bytes(b"file content")
@@ -694,7 +694,7 @@ def test_341_stdin_precedence_over_file_path(tmp_path):
 
 # TEST342: file-path with position 0 reads first positional arg as file
 def test_342_file_path_position_zero_reads_first_arg(tmp_path):
-    from capns.cap import CapArg, StdinSource, PositionSource
+    from capns.cap.definition import CapArg, StdinSource, PositionSource
 
     test_file = tmp_path / "test342.dat"
     test_file.write_bytes(b"binary data 342")
@@ -726,7 +726,7 @@ def test_342_file_path_position_zero_reads_first_arg(tmp_path):
 
 # TEST343: Non-file-path args are not affected by file reading
 def test_343_non_file_path_args_unaffected():
-    from capns.cap import CapArg, StdinSource, PositionSource
+    from capns.cap.definition import CapArg, StdinSource, PositionSource
 
     # Arg with different media type should NOT trigger file reading
     cap = create_test_cap(
@@ -757,8 +757,8 @@ def test_343_non_file_path_args_unaffected():
 
 # TEST344: file-path-array with invalid JSON fails clearly
 def test_344_file_path_array_invalid_json_fails():
-    from capns.cap import CapArg, StdinSource, PositionSource
-    from capns.plugin_runtime import CliError
+    from capns.cap.definition import CapArg, StdinSource, PositionSource
+    from capns.bifaci.plugin_runtime import CliError
 
     cap = create_test_cap(
         'cap:in="media:bytes";op=batch;out="media:void"',
@@ -791,8 +791,8 @@ def test_344_file_path_array_invalid_json_fails():
 
 # TEST345: file-path-array with one file failing stops and reports error
 def test_345_file_path_array_one_file_missing_fails_hard(tmp_path):
-    from capns.cap import CapArg, StdinSource, PositionSource
-    from capns.plugin_runtime import IoRuntimeError
+    from capns.cap.definition import CapArg, StdinSource, PositionSource
+    from capns.bifaci.plugin_runtime import IoRuntimeError
 
     file1 = tmp_path / "test345_exists.txt"
     file1.write_bytes(b"exists")
@@ -834,7 +834,7 @@ def test_345_file_path_array_one_file_missing_fails_hard(tmp_path):
 
 # TEST346: Large file (1MB) reads successfully
 def test_346_large_file_reads_successfully(tmp_path):
-    from capns.cap import CapArg, StdinSource, PositionSource
+    from capns.cap.definition import CapArg, StdinSource, PositionSource
 
     test_file = tmp_path / "test346_large.bin"
 
@@ -869,7 +869,7 @@ def test_346_large_file_reads_successfully(tmp_path):
 
 # TEST347: Empty file reads as empty bytes
 def test_347_empty_file_reads_as_empty_bytes(tmp_path):
-    from capns.cap import CapArg, StdinSource, PositionSource
+    from capns.cap.definition import CapArg, StdinSource, PositionSource
 
     test_file = tmp_path / "test347_empty.txt"
     test_file.write_bytes(b"")
@@ -900,7 +900,7 @@ def test_347_empty_file_reads_as_empty_bytes(tmp_path):
 
 # TEST348: file-path conversion respects source order
 def test_348_file_path_conversion_respects_source_order(tmp_path):
-    from capns.cap import CapArg, StdinSource, PositionSource
+    from capns.cap.definition import CapArg, StdinSource, PositionSource
 
     test_file = tmp_path / "test348.txt"
     test_file.write_bytes(b"file content 348")
@@ -935,7 +935,7 @@ def test_348_file_path_conversion_respects_source_order(tmp_path):
 
 # TEST349: file-path arg with multiple sources tries all in order
 def test_349_file_path_multiple_sources_fallback(tmp_path):
-    from capns.cap import CapArg, StdinSource, PositionSource, CliFlagSource
+    from capns.cap.definition import CapArg, StdinSource, PositionSource, CliFlagSource
 
     test_file = tmp_path / "test349.txt"
     test_file.write_bytes(b"content 349")
@@ -968,7 +968,7 @@ def test_349_file_path_multiple_sources_fallback(tmp_path):
 
 # TEST350: Integration test - full CLI mode invocation with file-path
 def test_350_full_cli_mode_with_file_path_integration(tmp_path):
-    from capns.cap import CapArg, StdinSource, PositionSource
+    from capns.cap.definition import CapArg, StdinSource, PositionSource
 
     test_file = tmp_path / "test350_input.pdf"
     test_content = b"PDF file content for integration test"
@@ -1027,7 +1027,7 @@ def test_350_full_cli_mode_with_file_path_integration(tmp_path):
 
 # TEST351: file-path-array with empty array succeeds
 def test_351_file_path_array_empty_array():
-    from capns.cap import CapArg, StdinSource, PositionSource
+    from capns.cap.definition import CapArg, StdinSource, PositionSource
 
     cap = create_test_cap(
         'cap:in="media:bytes";op=batch;out="media:void"',
@@ -1059,8 +1059,8 @@ def test_351_file_path_array_empty_array():
 # TEST352: file permission denied error is clear (Unix-specific)
 @pytest.mark.skipif(sys.platform == "win32", reason="Unix permissions only")
 def test_352_file_permission_denied_clear_error(tmp_path):
-    from capns.cap import CapArg, StdinSource, PositionSource
-    from capns.plugin_runtime import IoRuntimeError
+    from capns.cap.definition import CapArg, StdinSource, PositionSource
+    from capns.bifaci.plugin_runtime import IoRuntimeError
     import os
 
     test_file = tmp_path / "test352_noperm.txt"
@@ -1102,7 +1102,7 @@ def test_352_file_permission_denied_clear_error(tmp_path):
 
 # TEST353: CBOR payload format matches between CLI and CBOR mode
 def test_353_cbor_payload_format_consistency():
-    from capns.cap import CapArg, StdinSource, PositionSource
+    from capns.cap.definition import CapArg, StdinSource, PositionSource
 
     cap = create_test_cap(
         'cap:in="media:text;textable";op=test;out="media:void"',
@@ -1136,7 +1136,7 @@ def test_353_cbor_payload_format_consistency():
 
 # TEST354: Glob pattern with no matches produces empty array
 def test_354_glob_pattern_no_matches_empty_array(tmp_path):
-    from capns.cap import CapArg, StdinSource, PositionSource
+    from capns.cap.definition import CapArg, StdinSource, PositionSource
 
     cap = create_test_cap(
         'cap:in="media:bytes";op=batch;out="media:void"',
@@ -1171,7 +1171,7 @@ def test_354_glob_pattern_no_matches_empty_array(tmp_path):
 
 # TEST355: Glob pattern skips directories
 def test_355_glob_pattern_skips_directories(tmp_path):
-    from capns.cap import CapArg, StdinSource, PositionSource
+    from capns.cap.definition import CapArg, StdinSource, PositionSource
 
     test_dir = tmp_path / "test355"
     test_dir.mkdir()
@@ -1217,7 +1217,7 @@ def test_355_glob_pattern_skips_directories(tmp_path):
 
 # TEST356: Multiple glob patterns combined
 def test_356_multiple_glob_patterns_combined(tmp_path):
-    from capns.cap import CapArg, StdinSource, PositionSource
+    from capns.cap.definition import CapArg, StdinSource, PositionSource
 
     test_dir = tmp_path / "test356"
     test_dir.mkdir()
@@ -1266,7 +1266,7 @@ def test_356_multiple_glob_patterns_combined(tmp_path):
 # TEST357: Symlinks are followed when reading files
 @pytest.mark.skipif(sys.platform == "win32", reason="Unix symlinks only")
 def test_357_symlinks_followed(tmp_path):
-    from capns.cap import CapArg, StdinSource, PositionSource
+    from capns.cap.definition import CapArg, StdinSource, PositionSource
     import os
 
     test_dir = tmp_path / "test357"
@@ -1303,7 +1303,7 @@ def test_357_symlinks_followed(tmp_path):
 
 # TEST358: Binary file with non-UTF8 data reads correctly
 def test_358_binary_file_non_utf8(tmp_path):
-    from capns.cap import CapArg, StdinSource, PositionSource
+    from capns.cap.definition import CapArg, StdinSource, PositionSource
 
     test_file = tmp_path / "test358.bin"
 
@@ -1337,8 +1337,8 @@ def test_358_binary_file_non_utf8(tmp_path):
 
 # TEST359: Invalid glob pattern fails with clear error
 def test_359_invalid_glob_pattern_fails():
-    from capns.cap import CapArg, StdinSource, PositionSource
-    from capns.plugin_runtime import CliError
+    from capns.cap.definition import CapArg, StdinSource, PositionSource
+    from capns.bifaci.plugin_runtime import CliError
 
     cap = create_test_cap(
         'cap:in="media:bytes";op=batch;out="media:void"',
@@ -1373,7 +1373,7 @@ def test_359_invalid_glob_pattern_fails():
 
 # TEST360: Extract effective payload handles file-path data correctly
 def test_360_extract_effective_payload_with_file_data(tmp_path):
-    from capns.cap import CapArg, StdinSource, PositionSource
+    from capns.cap.definition import CapArg, StdinSource, PositionSource
 
     test_file = tmp_path / "test360.pdf"
     pdf_content = b"PDF content for extraction test"
@@ -1415,7 +1415,7 @@ def test_360_extract_effective_payload_with_file_data(tmp_path):
 
 # TEST361: CLI mode with file path - pass file path as command-line argument
 def test_361_cli_mode_file_path(tmp_path):
-    from capns.cap import CapArg, StdinSource, PositionSource
+    from capns.cap.definition import CapArg, StdinSource, PositionSource
 
     test_file = tmp_path / "test361.pdf"
     pdf_content = b"PDF content for CLI file path test"
@@ -1458,7 +1458,7 @@ def test_361_cli_mode_file_path(tmp_path):
 # - Binary is chunked on-the-fly and accumulated
 # - Handler receives complete CBOR payload
 def test_362_cli_mode_piped_binary():
-    from capns.cap import CapArg, StdinSource
+    from capns.cap.definition import CapArg, StdinSource
     import io
 
     # Simulate large binary being piped (1MB PDF)
@@ -1485,7 +1485,7 @@ def test_362_cli_mode_piped_binary():
     mock_stdin = io.BytesIO(pdf_content)
 
     # Build payload from streaming reader (what CLI piped mode does)
-    from capns.cbor_frame import DEFAULT_MAX_CHUNK
+    from capns.bifaci.frame import DEFAULT_MAX_CHUNK
     payload = runtime._build_payload_from_streaming_reader(cap, mock_stdin, DEFAULT_MAX_CHUNK)
 
     # Verify payload is CBOR array with correct structure
@@ -1505,7 +1505,7 @@ def test_362_cli_mode_piped_binary():
 
 # TEST363: CBOR mode with chunked content - send file content streaming as chunks
 def test_363_cbor_mode_chunked_content():
-    from capns.cap import CapArg, StdinSource
+    from capns.cap.definition import CapArg, StdinSource
     import queue
 
     pdf_content = bytes([0xAA] * 10000)  # 10KB of data
@@ -1547,7 +1547,7 @@ def test_363_cbor_mode_chunked_content():
     runtime.register_raw(cap.urn_string(), handler)
 
     # Build CBOR payload
-    from capns.caller import CapArgumentValue
+    from capns.cap.caller import CapArgumentValue
     args = [CapArgumentValue(media_urn="media:pdf;bytes", value=pdf_content)]
     payload_bytes = cbor2.dumps([
         {
@@ -1599,7 +1599,7 @@ def test_364_cbor_mode_file_path(tmp_path):
     test_file.write_bytes(pdf_content)
 
     # Build CBOR arguments with file-path URN
-    from capns.caller import CapArgumentValue
+    from capns.cap.caller import CapArgumentValue
     args = [CapArgumentValue(
         media_urn="media:file-path;textable;form=scalar",
         value=str(test_file).encode('utf-8'),
@@ -1642,7 +1642,7 @@ def test_395_build_payload_small():
     data = b"small payload"
     reader = io.BytesIO(data)
 
-    from capns.cbor_frame import DEFAULT_MAX_CHUNK
+    from capns.bifaci.frame import DEFAULT_MAX_CHUNK
     payload = runtime._build_payload_from_streaming_reader(cap, reader, DEFAULT_MAX_CHUNK)
 
     # Verify CBOR structure
@@ -1700,7 +1700,7 @@ def test_397_build_payload_empty():
 
     reader = io.BytesIO(b"")
 
-    from capns.cbor_frame import DEFAULT_MAX_CHUNK
+    from capns.bifaci.frame import DEFAULT_MAX_CHUNK
     payload = runtime._build_payload_from_streaming_reader(cap, reader, DEFAULT_MAX_CHUNK)
 
     cbor_val = cbor2.loads(payload)
@@ -1731,7 +1731,7 @@ def test_398_build_payload_io_error():
 
     reader = ErrorReader()
 
-    from capns.cbor_frame import DEFAULT_MAX_CHUNK
+    from capns.bifaci.frame import DEFAULT_MAX_CHUNK
     with pytest.raises(IOError) as exc_info:
         runtime._build_payload_from_streaming_reader(cap, reader, DEFAULT_MAX_CHUNK)
 

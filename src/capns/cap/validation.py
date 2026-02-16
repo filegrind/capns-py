@@ -84,7 +84,7 @@ def validate_cap_args(cap) -> None:
     - RULE9: No two args may have same cli_flag
     - RULE10: Reserved cli_flags cannot be used
     """
-    from capns.cap import PositionSource, CliFlagSource, StdinSource
+    from capns.cap.definition import PositionSource, CliFlagSource, StdinSource
 
     cap_urn = cap.urn_string()
     args = cap.get_args()
@@ -194,7 +194,7 @@ def validate_positional_arguments(cap, arguments: List[Any]) -> None:
     - Required arguments are provided
     - Basic type checking
     """
-    from capns.cap import PositionSource
+    from capns.cap.definition import PositionSource
 
     cap_urn = cap.urn_string()
     args = cap.get_args()

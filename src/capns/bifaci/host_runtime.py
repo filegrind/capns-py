@@ -31,14 +31,14 @@ import queue
 from typing import Optional, List, Callable
 from dataclasses import dataclass
 
-from capns.cbor_frame import Frame, FrameType, Limits
-from capns.cbor_io import (
+from capns.bifaci.frame import Frame, FrameType, Limits
+from capns.bifaci.io import (
     FrameReader,
     FrameWriter,
     handshake,
     CborError,
 )
-from capns.cap_urn import CapUrn, CapUrnError
+from capns.urn.cap_urn import CapUrn, CapUrnError
 
 
 # =========================================================================

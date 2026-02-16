@@ -33,8 +33,8 @@ try:
 except ImportError:
     HTTPX_AVAILABLE = False
 
-from capns.media_urn import MediaUrn
-from capns.registry import RegistryConfig
+from capns.urn.media_urn import MediaUrn
+from capns.cap.registry import RegistryConfig
 
 
 CACHE_DURATION_HOURS = 24

@@ -6,9 +6,9 @@ Tests use // TEST###: comments matching the Rust implementation for cross-tracki
 import pytest
 import json
 from capns import CapUrn
-from capns.cap import Cap, CapArg, StdinSource
-from capns.manifest import CapManifest
-from capns.media_urn import MEDIA_VOID, MEDIA_OBJECT
+from capns.cap.definition import Cap, CapArg, StdinSource
+from capns.bifaci.manifest import CapManifest
+from capns.urn.media_urn import MEDIA_VOID, MEDIA_OBJECT
 
 
 def _test_urn(tags: str) -> str:

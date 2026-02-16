@@ -10,7 +10,7 @@ from capns.standard.caps import (
     model_path_urn,
     llm_conversation_urn,
 )
-from capns.media_urn import (
+from capns.urn.media_urn import (
     MEDIA_MODEL_SPEC,
     MEDIA_AVAILABILITY_OUTPUT,
     MEDIA_PATH_OUTPUT,

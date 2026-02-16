@@ -4,7 +4,7 @@ Tests use // TEST###: comments matching the Rust implementation for cross-tracki
 """
 
 import pytest
-from capns.cbor_frame import (
+from capns.bifaci.frame import (
     FrameType,
     MessageId,
     Limits,

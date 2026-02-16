@@ -24,7 +24,8 @@ try:
 except ImportError:
     HTTPX_AVAILABLE = False
 
-from capns import Cap, CapUrn
+from capns.cap.definition import Cap
+from capns.urn.cap_urn import CapUrn
 
 
 DEFAULT_REGISTRY_BASE_URL = "https://capns.org"

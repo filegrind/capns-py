@@ -5,7 +5,7 @@ Tests use // TEST###: comments matching the Rust implementation for cross-tracki
 
 import pytest
 import io
-from capns.cbor_io import (
+from capns.bifaci.io import (
     encode_frame,
     decode_frame,
     read_frame,
@@ -20,7 +20,7 @@ from capns.cbor_io import (
     UnexpectedEofError,
     HandshakeError,
 )
-from capns.cbor_frame import (
+from capns.bifaci.frame import (
     Frame,
     FrameType,
     MessageId,

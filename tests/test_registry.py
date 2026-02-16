@@ -9,8 +9,8 @@ import os
 import tempfile
 from pathlib import Path
 from capns import Cap, CapUrn, CapArg
-from capns.cap import PositionSource, StdinSource
-from capns.registry import (
+from capns.cap.definition import PositionSource, StdinSource
+from capns.cap.registry import (
     CapRegistry,
     RegistryConfig,
     normalize_cap_urn,
@@ -19,7 +19,7 @@ from capns.registry import (
     ValidationError,
     CacheError,
 )
-from capns.media_urn import MEDIA_VOID, MEDIA_OBJECT, MEDIA_STRING
+from capns.urn.media_urn import MEDIA_VOID, MEDIA_OBJECT, MEDIA_STRING
 
 
 def _test_urn(tags: str) -> str:

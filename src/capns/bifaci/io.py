@@ -27,7 +27,7 @@ try:
 except ImportError:
     CBOR2_AVAILABLE = False
 
-from capns.cbor_frame import (
+from capns.bifaci.frame import (
     Frame,
     FrameType,
     MessageId,

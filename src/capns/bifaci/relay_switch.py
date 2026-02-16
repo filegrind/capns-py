@@ -33,9 +33,9 @@ import queue
 from typing import Optional, List, Tuple, Dict
 from dataclasses import dataclass
 
-from capns.cbor_frame import Frame, FrameType, Limits, MessageId
-from capns.cbor_io import FrameReader, FrameWriter, CborError
-from capns.cap_urn import CapUrn
+from capns.bifaci.frame import Frame, FrameType, Limits, MessageId
+from capns.bifaci.io import FrameReader, FrameWriter, CborError
+from capns.urn.cap_urn import CapUrn
 
 # =============================================================================
 # ERROR TYPES

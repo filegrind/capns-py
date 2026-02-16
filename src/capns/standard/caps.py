@@ -5,8 +5,8 @@ all MACINA providers. These are the single source of truth for URN construction.
 """
 
 from typing import Optional
-from capns.cap_urn import CapUrn, CapUrnBuilder
-from capns.media_urn import (
+from capns.urn.cap_urn import CapUrn, CapUrnBuilder
+from capns.urn.media_urn import (
     # Primitives
     MEDIA_STRING,
     MEDIA_INTEGER,

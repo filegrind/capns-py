@@ -5,8 +5,8 @@ Tests use // TEST###: comments matching the Rust implementation for cross-tracki
 
 import pytest
 from capns import CapUrn, Cap, CapArg
-from capns.cap import PositionSource, CliFlagSource, StdinSource
-from capns.validation import (
+from capns.cap.definition import PositionSource, CliFlagSource, StdinSource
+from capns.cap.validation import (
     validate_cap_args,
     validate_positional_arguments,
     MissingRequiredArgumentError,
@@ -14,7 +14,7 @@ from capns.validation import (
     TooManyArgumentsError,
     RESERVED_CLI_FLAGS,
 )
-from capns.media_urn import MEDIA_STRING, MEDIA_INTEGER, MEDIA_VOID, MEDIA_OBJECT
+from capns.urn.media_urn import MEDIA_STRING, MEDIA_INTEGER, MEDIA_VOID, MEDIA_OBJECT
 
 
 def _test_urn(tags: str) -> str:

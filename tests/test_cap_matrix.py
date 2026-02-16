@@ -4,18 +4,12 @@ Tests use // TEST###: comments matching the Rust implementation for cross-tracki
 """
 
 import pytest
-from capns import Cap, CapUrn, CapOutput, CapSet, CapArgumentValue
-from capns.cap_matrix import (
-    CapGraph,
-    CapGraphEdge,
-    CapMatrix,
-    CapBlock,
-    BestCapSetMatch,
-    CapMatrixError,
-    NoSetsFoundError,
-    InvalidUrnError,
+from capns import (
+    Cap, CapUrn, CapOutput, CapSet, CapArgumentValue,
+    CapGraph, CapGraphEdge, CapMatrix, CapBlock, BestCapSetMatch,
+    CapMatrixError, NoSetsFoundError, InvalidUrnError,
+    MEDIA_STRING, MEDIA_VOID,
 )
-from capns.media_urn import MEDIA_STRING, MEDIA_VOID
 
 
 class MockCapSet(CapSet):

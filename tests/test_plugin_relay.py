@@ -5,9 +5,9 @@ import threading
 
 import pytest
 
-from capns.cbor_frame import Frame, FrameType, Limits, MessageId
-from capns.cbor_io import FrameReader, FrameWriter
-from capns.plugin_relay import RelaySlave, RelayMaster
+from capns.bifaci.frame import Frame, FrameType, Limits, MessageId
+from capns.bifaci.io import FrameReader, FrameWriter
+from capns.bifaci.relay import RelaySlave, RelayMaster
 
 
 def make_pipe():

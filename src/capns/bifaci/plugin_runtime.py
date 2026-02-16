@@ -53,13 +53,13 @@ from abc import ABC, abstractmethod
 from dataclasses import dataclass
 import cbor2
 
-from .cbor_frame import Frame, FrameType, Limits, MessageId, DEFAULT_MAX_FRAME, DEFAULT_MAX_CHUNK, compute_checksum
-from .cbor_io import handshake_accept, FrameReader, FrameWriter, CborError, ProtocolError
-from .caller import CapArgumentValue
-from .cap import ArgSource, Cap, CapArg, CliFlagSource
-from .cap_urn import CapUrn
-from .manifest import CapManifest
-from .media_urn import MediaUrn, MediaUrnError, MEDIA_FILE_PATH, MEDIA_FILE_PATH_ARRAY
+from capns.bifaci.frame import Frame, FrameType, Limits, MessageId, DEFAULT_MAX_FRAME, DEFAULT_MAX_CHUNK, compute_checksum
+from capns.bifaci.io import handshake_accept, FrameReader, FrameWriter, CborError, ProtocolError
+from capns.cap.caller import CapArgumentValue
+from capns.cap.definition import ArgSource, Cap, CapArg, CliFlagSource
+from capns.urn.cap_urn import CapUrn
+from capns.bifaci.manifest import CapManifest
+from capns.urn.media_urn import MediaUrn, MediaUrnError, MEDIA_FILE_PATH, MEDIA_FILE_PATH_ARRAY
 
 
 class RuntimeError(Exception):

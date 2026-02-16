@@ -5,7 +5,7 @@ This module defines the unified manifest interface with standardized cap-based d
 
 import json
 from typing import List, Optional, Dict, Any
-from capns.cap import Cap
+from capns.cap.definition import Cap
 
 
 class CapManifest:

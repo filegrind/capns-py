@@ -4,7 +4,7 @@ Tests use // TEST###: comments matching the Rust implementation for cross-tracki
 """
 
 import pytest
-from capns.caller import (
+from capns.cap.caller import (
     StdinSourceData,
     StdinSourceFileReference,
     CapArgumentValue,
@@ -12,8 +12,8 @@ from capns.caller import (
     CapSet,
 )
 from capns import Cap, CapUrn, CapArg
-from capns.cap import PositionSource
-from capns.media_urn import MEDIA_STRING, MEDIA_VOID, MEDIA_OBJECT
+from capns.cap.definition import PositionSource
+from capns.urn.media_urn import MEDIA_STRING, MEDIA_VOID, MEDIA_OBJECT
 
 
 def _test_urn(tags: str) -> str:

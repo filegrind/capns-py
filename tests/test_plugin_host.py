@@ -16,9 +16,9 @@ import time
 
 import pytest
 
-from capns.plugin_host_runtime import PluginHost
-from capns.cbor_frame import Frame, FrameType, Limits, MessageId
-from capns.cbor_io import (
+from capns.bifaci.host_runtime import PluginHost
+from capns.bifaci.frame import Frame, FrameType, Limits, MessageId
+from capns.bifaci.io import (
     FrameReader,
     FrameWriter,
     handshake_accept,

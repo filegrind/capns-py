@@ -10,7 +10,7 @@ tags default to "media:" (wildcard). Explicit "*" also expands to "media:".
 
 from typing import Dict, List, Optional
 from tagged_urn import TaggedUrn, TaggedUrnBuilder, TaggedUrnError
-from capns.media_urn import MediaUrn, MediaUrnError
+from capns.urn.media_urn import MediaUrn, MediaUrnError
 
 
 class CapUrnError(Exception):
@@ -245,8 +245,8 @@ class CapUrn:
         """Check if this cap (pattern/handler) accepts the given request (instance).
 
         Direction specs use semantic TaggedUrn matching via MediaUrn:
-        - Input: `cap_in.accepts(request_in)` — does request's data satisfy cap's input requirement?
-        - Output: `request_out.accepts(cap_out)` — does cap's output satisfy what request expects?
+        - Input: `cap_in.accepts(request_in)` — cap's input pattern accepts request's input
+        - Output: `cap_out.conforms_to(request_out)` — cap's output conforms to request's expectation
 
         For other tags: cap satisfies request's tag constraints.
         Missing cap tags are wildcards (cap accepts any value for that tag).

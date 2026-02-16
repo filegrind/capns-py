@@ -8,7 +8,7 @@ import pytest
 import tempfile
 from pathlib import Path
 
-from capns.media_spec import (
+from capns.media.spec import (
     MediaValidation,
     MediaSpecDef,
     ResolvedMediaSpec,
@@ -18,7 +18,7 @@ from capns.media_spec import (
     UnresolvableMediaUrn,
     DuplicateMediaUrn,
 )
-from capns.media_registry import MediaUrnRegistry
+from capns.media.registry import MediaUrnRegistry
 
 
 # Helper to create a test registry

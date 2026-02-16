@@ -7,9 +7,9 @@ from io import BytesIO
 
 import pytest
 
-from capns.cbor_frame import Frame, FrameType, Limits, MessageId
-from capns.cbor_io import FrameReader, FrameWriter
-from capns.relay_switch import (
+from capns.bifaci.frame import Frame, FrameType, Limits, MessageId
+from capns.bifaci.io import FrameReader, FrameWriter
+from capns.bifaci.relay_switch import (
     RelaySwitch,
     SocketPair,
     NoHandlerError,

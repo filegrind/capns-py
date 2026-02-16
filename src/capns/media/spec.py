@@ -18,7 +18,7 @@ Example: `text/plain; profile=https://capns.org/schema/str`
 import os
 from typing import List, Optional, Any, Dict
 
-from capns.media_urn import MediaUrn
+from capns.urn.media_urn import MediaUrn
 
 
 # =============================================================================

@@ -119,7 +119,7 @@ class SchemaValidator:
 
     def validate_arguments(self, cap, arguments: list) -> None:
         """Validate all positional arguments for a capability"""
-        from capns.cap import PositionSource
+        from capns.cap.definition import PositionSource
 
         args = cap.get_args()
 

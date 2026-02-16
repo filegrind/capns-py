@@ -13,7 +13,7 @@ Tests use // TEST###: comments matching the Rust implementation for cross-tracki
 import pytest
 import socket
 import threading
-from capns.cbor_frame import (
+from capns.bifaci.frame import (
     Frame,
     FrameType,
     MessageId,
@@ -21,7 +21,7 @@ from capns.cbor_frame import (
     DEFAULT_MAX_FRAME,
     DEFAULT_MAX_CHUNK,
 )
-from capns.cbor_io import (
+from capns.bifaci.io import (
     FrameReader,
     FrameWriter,
     handshake,

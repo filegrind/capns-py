@@ -7,7 +7,7 @@ the cap URN, arguments, output, and metadata.
 import json
 from typing import Dict, List, Optional, Any
 from dataclasses import dataclass, field
-from capns.cap_urn import CapUrn
+from capns.urn.cap_urn import CapUrn
 
 
 @dataclass

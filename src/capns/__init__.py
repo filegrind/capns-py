@@ -5,7 +5,8 @@ all MACINA plugins and providers. It defines the formal structure for cap
 identifiers with flat tag-based naming, wildcard support, and specificity comparison.
 """
 
-from capns.media_urn import (
+# URN module
+from capns.urn.media_urn import (
     MediaUrn,
     MediaUrnError,
     # Standard media URN constants
@@ -68,18 +69,28 @@ from capns.media_urn import (
     audio_media_urn_for_ext,
 )
 
-from capns.cap_urn import (
+from capns.urn.cap_urn import (
     CapUrn,
     CapUrnError,
     CapUrnBuilder,
 )
 
-from capns.response import ResponseWrapper
+from capns.urn.cap_matrix import (
+    CapGraph,
+    CapGraphEdge,
+    CapMatrix,
+    CapBlock,
+    BestCapSetMatch,
+    CompositeCapSet,
+    CapMatrixError,
+    NoSetsFoundError,
+    InvalidUrnError,
+)
 
-from capns.cap import Cap, CapArg, CapOutput, StdinSource, PositionSource, CliFlagSource, MediaSpecDef
-from capns.manifest import CapManifest
-
-from capns.validation import (
+# Cap module
+from capns.cap.response import ResponseWrapper
+from capns.cap.definition import Cap, CapArg, CapOutput, StdinSource, PositionSource, CliFlagSource, MediaSpecDef
+from capns.cap.validation import (
     validate_cap_args,
     validate_positional_arguments,
     ValidationError,
@@ -90,8 +101,7 @@ from capns.validation import (
     MediaSpecValidationError,
     RESERVED_CLI_FLAGS,
 )
-
-from capns.schema_validation import (
+from capns.cap.schema_validation import (
     SchemaValidator,
     SchemaValidationError,
     SchemaCompilationError,
@@ -99,16 +109,14 @@ from capns.schema_validation import (
     OutputValidationError,
     MediaUrnNotResolvedError,
 )
-
-from capns.caller import (
+from capns.cap.caller import (
     StdinSourceData,
     StdinSourceFileReference,
     CapArgumentValue,
     CapSet,
     CapCaller,
 )
-
-from capns.registry import (
+from capns.cap.registry import (
     CapRegistry,
     RegistryConfig,
     RegistryError,
@@ -119,15 +127,15 @@ from capns.registry import (
     normalize_cap_urn,
 )
 
-from capns.media_registry import (
+# Media module
+from capns.media.registry import (
     MediaUrnRegistry,
     StoredMediaSpec,
     MediaRegistryError,
     ExtensionNotFoundError,
     normalize_media_urn,
 )
-
-from capns.media_spec import (
+from capns.media.spec import (
     MediaValidation,
     ResolvedMediaSpec,
     MediaSpecError,
@@ -175,28 +183,19 @@ from capns.media_spec import (
     get_profile_url,
 )
 
-from capns.cap_matrix import (
-    CapGraph,
-    CapGraphEdge,
-    CapMatrix,
-    CapBlock,
-    BestCapSetMatch,
-    CompositeCapSet,
-    CapMatrixError,
-    NoSetsFoundError,
-    InvalidUrnError,
+# Bifaci module
+from capns.bifaci.manifest import CapManifest
+from capns.bifaci.relay import (
+    RelaySlave,
+    RelayMaster,
+    RelayError,
 )
 
+# Standard module
 from capns.standard.caps import (
     model_availability_urn,
     model_path_urn,
     llm_conversation_urn,
-)
-
-from capns.plugin_relay import (
-    RelaySlave,
-    RelayMaster,
-    RelayError,
 )
 
 __all__ = [

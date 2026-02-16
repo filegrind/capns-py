@@ -5,7 +5,7 @@ Tests for PluginHostRuntime, ResponseChunk, PluginResponse, and error types.
 
 import pytest
 
-from capns.plugin_host_runtime import (
+from capns.bifaci.host_runtime import (
     ResponseChunk,
     PluginResponse,
     AsyncHostError,
@@ -19,7 +19,7 @@ from capns.plugin_host_runtime import (
     SendError,
     RecvError,
 )
-from capns.cbor_frame import FrameType
+from capns.bifaci.frame import FrameType
 
 
 # TEST235: Test ResponseChunk stores payload, seq, offset, len, and eof fields correctly
