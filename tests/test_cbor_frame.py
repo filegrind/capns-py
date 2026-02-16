@@ -164,12 +164,15 @@ def test_req_frame():
 def test_chunk_frame():
     """Test CHUNK frame creation with stream_id (Protocol v2)"""
     id = MessageId.new_uuid()
-    frame = Frame.chunk(id, "stream-1", 3, b"data")
+    payload = b"data"
+    frame = Frame.chunk(id, "stream-1", 3, payload, index=0, checksum=compute_checksum(payload))
     assert frame.frame_type == FrameType.CHUNK
     assert frame.id == id
     assert frame.stream_id == "stream-1"
     assert frame.seq == 3
-    assert frame.payload == b"data"
+    assert frame.payload == payload
+    assert frame.index == 0
+    assert frame.checksum == compute_checksum(payload)
     assert not frame.is_eof(), "plain chunk should not be EOF"
 
 
@@ -412,16 +415,18 @@ def test_stream_start_frame():
     assert frame.id == req_id
 
 
-# TEST366: Frame::stream_end stores req_id, stream_id
+# TEST366: Frame::stream_end stores req_id, stream_id, chunk_count
 def test_stream_end_frame():
     """Test STREAM_END frame stores req_id and stream_id"""
     req_id = MessageId.new_uuid()
     stream_id = "stream-xyz-456"
+    chunk_count = 5
 
-    frame = Frame.stream_end(req_id, stream_id)
+    frame = Frame.stream_end(req_id, stream_id, chunk_count)
 
     assert frame.frame_type == FrameType.STREAM_END
     assert frame.stream_id == stream_id
+    assert frame.chunk_count == chunk_count
     assert frame.media_urn is None, "STREAM_END should not have media_urn"
     assert frame.id == req_id
 
