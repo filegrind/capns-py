@@ -485,7 +485,9 @@ class CapMatrix:
 
         for entry in self.sets.values():
             for cap in entry.capabilities:
-                if cap.urn.accepts(request):
+                # Routing direction: request.accepts(registered_cap)
+                # request is pattern, cap is instance
+                if request.accepts(cap.urn):
                     matching_sets.append(entry.host)
                     break  # Found a matching capability for this host
 
@@ -518,7 +520,9 @@ class CapMatrix:
 
         for entry in self.sets.values():
             for cap in entry.capabilities:
-                if cap.urn.accepts(request):
+                # Routing direction: request.accepts(registered_cap)
+                # request is pattern, cap is instance
+                if request.accepts(cap.urn):
                     specificity = cap.urn.specificity()
                     if best_match is None or specificity > best_match[2]:
                         best_match = (entry.host, cap, specificity)

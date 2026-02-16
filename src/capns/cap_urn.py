@@ -4,8 +4,8 @@ This module provides a flat, tag-based cap URN system that replaces
 hierarchical naming with key-value tags to handle cross-cutting concerns and
 multi-dimensional cap classification.
 
-Cap URNs use the tagged URN format with "cap" prefix and require mandatory
-`in` and `out` tags that specify the input and output media URNs.
+Cap URNs use the tagged URN format with "cap" prefix. Missing `in` or `out`
+tags default to "media:" (wildcard). Explicit "*" also expands to "media:".
 """
 
 from typing import Dict, List, Optional
@@ -66,13 +66,36 @@ class CapUrn:
 
         return cls(in_urn, out_urn, tags_copy)
 
+    @staticmethod
+    def _process_direction_tag(tagged: TaggedUrn, tag_name: str) -> str:
+        """Process a direction tag (in or out) with wildcard expansion
+
+        - Missing tag → "media:" (wildcard)
+        - tag=* → "media:" (wildcard)
+        - tag= (empty) → error
+        - tag=value → value (validated later)
+        """
+        value = tagged.get_tag(tag_name)
+        if value is None:
+            # Tag is missing - default to media: wildcard
+            return "media:"
+        elif value == "*":
+            # Replace * with media: wildcard
+            return "media:"
+        elif value == "":
+            # Empty value is not allowed (in= or out= with nothing after =)
+            raise CapUrnError(f"Empty value for '{tag_name}' tag is not allowed")
+        else:
+            # Regular value - will be validated as MediaUrn later
+            return value
+
     @classmethod
     def from_string(cls, s: str) -> "CapUrn":
         """Create a cap URN from a string representation
 
         Format: `cap:in="media:...";out="media:...";key1=value1;...`
         The "cap:" prefix is mandatory.
-        The 'in' and 'out' tags are REQUIRED (direction is part of cap identity).
+        Missing 'in' or 'out' tags default to "media:" (wildcard).
         Trailing semicolons are optional and ignored.
         Tags are automatically sorted alphabetically for canonical form.
 
@@ -91,14 +114,9 @@ class CapUrn:
         if tagged.get_prefix() != cls.PREFIX:
             raise CapUrnError(f"Cap identifier must start with '{cls.PREFIX}:'")
 
-        # Extract required in and out tags
-        in_urn = tagged.get_tag("in")
-        out_urn = tagged.get_tag("out")
-
-        if in_urn is None:
-            raise CapUrnError("Missing required 'in' spec - caps must declare their input type")
-        if out_urn is None:
-            raise CapUrnError("Missing required 'out' spec - caps must declare their output type")
+        # Process direction tags with wildcard expansion
+        in_urn = cls._process_direction_tag(tagged, "in")
+        out_urn = cls._process_direction_tag(tagged, "out")
 
         # Collect remaining tags (excluding in/out)
         tags = {k: v for k, v in tagged.tags.items() if k not in ("in", "out")}
@@ -224,51 +242,49 @@ class CapUrn:
         return CapUrn(self.in_urn, self.out_urn, new_tags)
 
     def accepts(self, request: "CapUrn") -> bool:
-        """Check if this cap (handler) accepts the given request.
+        """Check if this cap (pattern/handler) accepts the given request (instance).
 
-        Direction (in/out) uses MediaUrn semantic matching:
-        - Input: cap_in.accepts(request_in) -- cap's input pattern accepts request's data
-        - Output: cap_out.conforms_to(request_out) -- cap's output conforms to what request expects
+        Direction specs use semantic TaggedUrn matching via MediaUrn:
+        - Input: `cap_in.accepts(request_in)` — does request's data satisfy cap's input requirement?
+        - Output: `request_out.accepts(cap_out)` — does cap's output satisfy what request expects?
 
-        For other tags:
-        - For each tag in the request: cap has same value, wildcard (*), or missing tag
-        - For each tag in the cap: if request is missing that tag, that's fine (cap is more specific)
-
-        Missing tags (except in/out) are treated as wildcards (less specific, can handle any value).
+        For other tags: cap satisfies request's tag constraints.
+        Missing cap tags are wildcards (cap accepts any value for that tag).
         """
-        # Direction specs: TaggedUrn semantic matching via MediaUrn
-        # Check in_urn: cap's input pattern must accept request's input data
-        if self.in_urn != "*" and request.in_urn != "*":
+        # Input direction: self.in_urn is pattern, request.in_urn is instance
+        # "media:" on the PATTERN side means "I accept any input" — skip check.
+        # "media:" on the INSTANCE side is just the least specific — still check.
+        if self.in_urn != "media:":
             cap_in = MediaUrn.from_string(self.in_urn)
             request_in = MediaUrn.from_string(request.in_urn)
             if not cap_in.accepts(request_in):
                 return False
 
-        # Check out_urn: cap's output must conform to what the request expects
-        if self.out_urn != "*" and request.out_urn != "*":
+        # Output direction: self.out_urn is pattern, request.out_urn is instance
+        # "media:" on the PATTERN side means "I accept any output" — skip check.
+        # "media:" on the INSTANCE side is just the least specific — still check.
+        if self.out_urn != "media:":
             cap_out = MediaUrn.from_string(self.out_urn)
             request_out = MediaUrn.from_string(request.out_urn)
             if not cap_out.conforms_to(request_out):
                 return False
 
-        # Check all other tags that the request specifies
-        for request_key, request_value in request.tags.items():
-            cap_value = self.tags.get(request_key)
-
-            if cap_value is not None:
-                if cap_value == "*":
-                    # Cap has wildcard - can handle any value
+        # Check all tags that the pattern (self) requires.
+        # The instance (request param) must satisfy every pattern constraint.
+        # Missing tag in instance → instance doesn't satisfy constraint → reject.
+        for self_key, self_value in self.tags.items():
+            req_value = request.tags.get(self_key)
+            if req_value is not None:
+                if self_value == "*":
                     continue
-                if request_value == "*":
-                    # Request accepts any value - cap's specific value matches
+                if req_value == "*":
                     continue
-                if cap_value != request_value:
-                    # Cap has specific value that doesn't match request's specific value
+                if self_value != req_value:
                     return False
-            # else: Missing tag in cap is treated as wildcard - can handle any value
+            else:
+                # Instance missing a tag the pattern requires
+                return False
 
-        # If cap has additional specific tags that request doesn't specify, that's fine
-        # The cap is just more specific than needed
         return True
 
     def conforms_to(self, cap: "CapUrn") -> bool:
@@ -283,6 +299,11 @@ class CapUrn:
         request = CapUrn.from_string(request_str)
         return self.accepts(request)
 
+    def conforms_to_str(self, cap_str: str) -> bool:
+        """Check if this cap conforms to a string-specified cap"""
+        cap = CapUrn.from_string(cap_str)
+        return self.conforms_to(cap)
+
     def specificity(self) -> int:
         """Calculate specificity score for cap matching
 
@@ -292,11 +313,12 @@ class CapUrn:
         """
         count = 0
 
-        if self.in_urn != "*":
+        # "media:" is the wildcard (contributes 0 to specificity)
+        if self.in_urn != "media:":
             in_media = MediaUrn.from_string(self.in_urn)
             count += len(in_media.inner().tags)
 
-        if self.out_urn != "*":
+        if self.out_urn != "media:":
             out_media = MediaUrn.from_string(self.out_urn)
             count += len(out_media.inner().tags)
 
@@ -312,14 +334,14 @@ class CapUrn:
     def with_wildcard_tag(self, key: str) -> "CapUrn":
         """Create a wildcard version by replacing specific values with wildcards
 
-        For 'in' or 'out', sets the corresponding direction spec to wildcard.
+        For 'in' or 'out', sets the corresponding direction spec to wildcard ("media:").
         """
         key_lower = key.lower()
 
         if key_lower == "in":
-            return CapUrn("*", self.out_urn, self.tags)
+            return CapUrn("media:", self.out_urn, self.tags)
         elif key_lower == "out":
-            return CapUrn(self.in_urn, "*", self.tags)
+            return CapUrn(self.in_urn, "media:", self.tags)
         else:
             if key_lower in self.tags:
                 new_tags = self.tags.copy()

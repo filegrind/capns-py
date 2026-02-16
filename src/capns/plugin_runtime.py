@@ -563,9 +563,12 @@ def collect_args_by_media_urn(frames: queue.Queue, media_urn: str) -> bytes:
             if frame.stream_id and frame.stream_id in streams:
                 stream_media_urn, chunks = streams[frame.stream_id]
                 # Check if this stream matches target
+                # target_urn is pattern (what we're looking for)
+                # stream_urn is instance (what the stream provides)
+                # Pattern must accept instance: target_urn.accepts(stream_urn)
                 try:
                     stream_urn = MediaUrn.from_string(stream_media_urn)
-                    if target_urn.accepts(stream_urn) or stream_urn.accepts(target_urn):
+                    if target_urn.accepts(stream_urn):
                         result = b''.join(chunks)
                         # Found match - consume rest of frames and return
                         for _ in iter(frames.get, None):
@@ -788,15 +791,18 @@ class PluginRuntime:
             return self.handlers[cap_urn]
 
         # Then try pattern matching via CapUrn
+        # Matching direction: request is pattern, registered cap is instance.
+        # `request.accepts(registered_cap)` — request must accept the registered cap
         try:
             request_urn = CapUrn.from_string(cap_urn)
         except Exception:
             return None
 
-        for pattern, handler in self.handlers.items():
+        for registered_cap_str, handler in self.handlers.items():
             try:
-                pattern_urn = CapUrn.from_string(pattern)
-                if pattern_urn.accepts(request_urn):
+                registered_urn = CapUrn.from_string(registered_cap_str)
+                # Routing direction: request.accepts(registered_cap)
+                if request_urn.accepts(registered_urn):
                     return handler
             except Exception:
                 continue

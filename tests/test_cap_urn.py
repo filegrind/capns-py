@@ -33,19 +33,22 @@ def test_cap_urn_creation():
     assert cap.out_spec() == MEDIA_OBJECT
 
 
-# TEST002: Test that missing 'in' spec fails with MissingInSpec, missing 'out' fails with MissingOutSpec
-def test_direction_specs_required():
-    # Missing 'in' should fail
-    with pytest.raises(CapUrnError, match="Missing required 'in' spec"):
-        CapUrn.from_string(f'cap:out="{MEDIA_OBJECT}";op=test')
+# TEST002: Test that missing 'in' or 'out' defaults to media: wildcard
+def test_direction_specs_default_to_wildcard():
+    # Missing 'in' defaults to media:
+    cap = CapUrn.from_string(f'cap:out="{MEDIA_OBJECT}";op=test')
+    assert cap.in_spec() == "media:"
+    assert cap.out_spec() == MEDIA_OBJECT
 
-    # Missing 'out' should fail
-    with pytest.raises(CapUrnError, match="Missing required 'out' spec"):
-        CapUrn.from_string(f'cap:in="{MEDIA_VOID}";op=test')
+    # Missing 'out' defaults to media:
+    cap = CapUrn.from_string(f'cap:in="{MEDIA_VOID}";op=test')
+    assert cap.in_spec() == MEDIA_VOID
+    assert cap.out_spec() == "media:"
 
     # Both present should succeed
     cap = CapUrn.from_string(f'cap:in="{MEDIA_VOID}";out="{MEDIA_OBJECT}";op=test')
-    assert cap is not None
+    assert cap.in_spec() == MEDIA_VOID
+    assert cap.out_spec() == MEDIA_OBJECT
 
 
 # TEST003: Test that direction specs must match exactly, different in/out types don't match, wildcard matches any
@@ -68,9 +71,11 @@ def test_direction_matching():
     cap4 = CapUrn.from_string(f'cap:in="{in_str}";op=test;out="{out_int}"')
     assert not cap1.accepts(cap4)
 
-    # Wildcard in direction should match
+    # Wildcard in=* direction: cap5 has media: for in, specific for out
     cap5 = CapUrn.from_string(f'cap:in=*;op=test;out="{out_obj}"')
-    assert cap1.accepts(cap5)
+    # cap1 (specific in) as pattern rejects cap5 (bare media: in) — specific pattern doesn't accept broad instance
+    assert not cap1.accepts(cap5)
+    # cap5 (wildcard in) as pattern accepts cap1 (specific in) — wildcard pattern accepts anything
     assert cap5.accepts(cap1)
 
 
@@ -411,19 +416,21 @@ def test_with_wildcard_tag():
     cap2 = cap.with_wildcard_tag("ext")
     assert cap2.get_tag("ext") == "*"
 
-    # Wildcard in direction
+    # Wildcard in direction (direction wildcard = "media:")
     cap3 = cap.with_wildcard_tag("in")
-    assert cap3.in_spec() == "*"
+    assert cap3.in_spec() == "media:"
 
-    # Wildcard out direction
+    # Wildcard out direction (direction wildcard = "media:")
     cap4 = cap.with_wildcard_tag("out")
-    assert cap4.out_spec() == "*"
+    assert cap4.out_spec() == "media:"
 
 
-# TEST028: Test empty cap URN fails with MissingInSpec
-def test_empty_cap_urn_fails():
-    with pytest.raises(CapUrnError):
-        CapUrn.from_string("cap:")
+# TEST028: Test bare "cap:" defaults to media: for both directions (identity morphism)
+def test_empty_cap_urn_defaults():
+    cap = CapUrn.from_string("cap:")
+    assert cap.in_spec() == "media:"
+    assert cap.out_spec() == "media:"
+    assert len(cap.tags) == 0
 
 
 # TEST029: Test minimal valid cap URN has just in and out, empty tags
@@ -560,11 +567,14 @@ def test_matching_semantics_test2_cap_missing_tag():
     assert cap.accepts(request), "Test 2: Cap missing tag should accept (implicit wildcard)"
 
 
-# TEST042: Matching semantics - cap with extra tag matches
+# TEST042: Pattern rejects instance missing required tags
 def test_matching_semantics_test3_cap_has_extra_tag():
     cap = CapUrn.from_string(_test_urn("op=generate;ext=pdf;version=2"))
     request = CapUrn.from_string(_test_urn("op=generate;ext=pdf"))
-    assert cap.accepts(request), "Test 3: Cap with extra tag should accept"
+    # cap(op,ext,version) as pattern rejects request missing version
+    assert not cap.accepts(request), "Pattern rejects instance missing required tag"
+    # Routing: request(op,ext) accepts cap(op,ext,version) — instance has all request needs
+    assert request.accepts(cap), "Request pattern satisfied by more-specific cap"
 
 
 # TEST043: Matching semantics - request wildcard matches specific cap value
@@ -611,11 +621,13 @@ def test_matching_semantics_test8_wildcard_direction_matches_anything():
     assert cap.accepts(request), "Test 8: Wildcard direction should accept any direction"
 
 
-# TEST049: Matching semantics - cross-dimension independence
+# TEST049: Non-overlapping tags — neither direction accepts
 def test_matching_semantics_test9_cross_dimension_independence():
     cap = CapUrn.from_string(_test_urn("op=generate"))
     request = CapUrn.from_string(_test_urn("ext=pdf"))
-    assert cap.accepts(request), "Test 9: Cross-dimension independence should accept"
+    # cap(op) rejects request missing op; request(ext) rejects cap missing ext
+    assert not cap.accepts(request), "Pattern rejects instance missing required tag"
+    assert not request.accepts(cap), "Reverse also rejects — non-overlapping tags"
 
 
 # TEST050: Matching semantics - direction mismatch prevents matching
