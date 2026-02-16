@@ -53,7 +53,7 @@ from abc import ABC, abstractmethod
 from dataclasses import dataclass
 import cbor2
 
-from .cbor_frame import Frame, FrameType, Limits, MessageId, DEFAULT_MAX_FRAME, DEFAULT_MAX_CHUNK
+from .cbor_frame import Frame, FrameType, Limits, MessageId, DEFAULT_MAX_FRAME, DEFAULT_MAX_CHUNK, compute_checksum
 from .cbor_io import handshake_accept, FrameReader, FrameWriter, CborError, ProtocolError
 from .caller import CapArgumentValue
 from .cap import ArgSource, Cap, CapArg, CliFlagSource
@@ -257,6 +257,7 @@ class PeerInvokerImpl:
                     # Each CHUNK payload MUST be independently decodable CBOR
                     offset = 0
                     seq = 0
+                    chunk_index = 0
                     while offset < len(arg.value):
                         chunk_size = min(len(arg.value) - offset, max_chunk)
                         chunk_bytes = arg.value[offset:offset + chunk_size]
@@ -264,12 +265,13 @@ class PeerInvokerImpl:
                         # CBOR-encode chunk as bytes - independently decodable
                         cbor_payload = cbor2.dumps(chunk_bytes)
 
-                        self.writer.write(Frame.chunk(request_id, stream_id, seq, cbor_payload))
+                        self.writer.write(Frame.chunk(request_id, stream_id, seq, cbor_payload, chunk_index, compute_checksum(cbor_payload)))
                         offset += chunk_size
                         seq += 1
+                        chunk_index += 1
 
                     # STREAM_END
-                    self.writer.write(Frame.stream_end(request_id, stream_id))
+                    self.writer.write(Frame.stream_end(request_id, stream_id, chunk_index))
 
                 # 3. END
                 self.writer.write(Frame.end(request_id, None))
@@ -350,6 +352,7 @@ class ThreadSafeEmitter:
         self.stream_id = stream_id
         self.media_urn = media_urn
         self.seq = 0
+        self.chunk_index = 0
         self.seq_lock = threading.Lock()
         self.writer_lock = writer_lock if writer_lock is not None else threading.Lock()
         self.max_chunk = max_chunk if max_chunk is not None else DEFAULT_MAX_CHUNK
@@ -394,8 +397,10 @@ class ThreadSafeEmitter:
                 with self.seq_lock:
                     seq = self.seq
                     self.seq += 1
+                    idx = self.chunk_index
+                    self.chunk_index += 1
 
-                frame = Frame.chunk(self.request_id, self.stream_id, seq, cbor_payload)
+                frame = Frame.chunk(self.request_id, self.stream_id, seq, cbor_payload, idx, compute_checksum(cbor_payload))
                 with self.writer_lock:
                     self.writer.write(frame)
 
@@ -424,8 +429,10 @@ class ThreadSafeEmitter:
                 with self.seq_lock:
                     seq = self.seq
                     self.seq += 1
+                    idx = self.chunk_index
+                    self.chunk_index += 1
 
-                frame = Frame.chunk(self.request_id, self.stream_id, seq, cbor_payload)
+                frame = Frame.chunk(self.request_id, self.stream_id, seq, cbor_payload, idx, compute_checksum(cbor_payload))
                 with self.writer_lock:
                     self.writer.write(frame)
 
@@ -441,8 +448,10 @@ class ThreadSafeEmitter:
                 with self.seq_lock:
                     seq = self.seq
                     self.seq += 1
+                    idx = self.chunk_index
+                    self.chunk_index += 1
 
-                frame = Frame.chunk(self.request_id, self.stream_id, seq, cbor_payload)
+                frame = Frame.chunk(self.request_id, self.stream_id, seq, cbor_payload, idx, compute_checksum(cbor_payload))
                 with self.writer_lock:
                     self.writer.write(frame)
 
@@ -457,8 +466,10 @@ class ThreadSafeEmitter:
                 with self.seq_lock:
                     seq = self.seq
                     self.seq += 1
+                    idx = self.chunk_index
+                    self.chunk_index += 1
 
-                frame = Frame.chunk(self.request_id, self.stream_id, seq, cbor_payload)
+                frame = Frame.chunk(self.request_id, self.stream_id, seq, cbor_payload, idx, compute_checksum(cbor_payload))
                 with self.writer_lock:
                     self.writer.write(frame)
 
@@ -470,8 +481,10 @@ class ThreadSafeEmitter:
             with self.seq_lock:
                 seq = self.seq
                 self.seq += 1
+                idx = self.chunk_index
+                self.chunk_index += 1
 
-            frame = Frame.chunk(self.request_id, self.stream_id, seq, cbor_payload)
+            frame = Frame.chunk(self.request_id, self.stream_id, seq, cbor_payload, idx, compute_checksum(cbor_payload))
             with self.writer_lock:
                 self.writer.write(frame)
 
@@ -489,7 +502,7 @@ class ThreadSafeEmitter:
                     self.writer.write(start_frame)
 
         # STREAM_END
-        stream_end = Frame.stream_end(self.request_id, self.stream_id)
+        stream_end = Frame.stream_end(self.request_id, self.stream_id, self.chunk_index)
         with self.writer_lock:
             self.writer.write(stream_end)
 
@@ -881,10 +894,10 @@ class PluginRuntime:
             # CHUNK: ALL values must be CBOR-encoded before sending as CHUNK payloads
             # Protocol: CHUNK payloads contain CBOR-encoded data (encode once, no double-wrapping)
             cbor_encoded = cbor2.dumps(arg.value)
-            frames.put(Frame.chunk(request_id, stream_id, 0, cbor_encoded))
+            frames.put(Frame.chunk(request_id, stream_id, 0, cbor_encoded, 0, compute_checksum(cbor_encoded)))
 
             # STREAM_END
-            frames.put(Frame.stream_end(request_id, stream_id))
+            frames.put(Frame.stream_end(request_id, stream_id, 1))
 
         # END
         frames.put(Frame.end(request_id, None))
@@ -1135,10 +1148,10 @@ class PluginRuntime:
 
                                 # CHUNKs
                                 for seq, chunk_data in enumerate(stream.chunks):
-                                    frames.put(Frame.chunk(request_id, stream_id, seq, chunk_data))
+                                    frames.put(Frame.chunk(request_id, stream_id, seq, chunk_data, seq, compute_checksum(chunk_data)))
 
                                 # STREAM_END
-                                frames.put(Frame.stream_end(request_id, stream_id))
+                                frames.put(Frame.stream_end(request_id, stream_id, len(stream.chunks)))
 
                             # END
                             frames.put(Frame.end(request_id, None))

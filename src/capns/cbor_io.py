@@ -36,6 +36,7 @@ from capns.cbor_frame import (
     DEFAULT_MAX_FRAME,
     DEFAULT_MAX_CHUNK,
     PROTOCOL_VERSION,
+    compute_checksum,
 )
 
 
@@ -459,16 +460,18 @@ class FrameWriter:
         # CHUNK(s)
         offset = 0
         seq = 0
+        chunk_index = 0
         while offset < len(payload):
             chunk_size = min(len(payload) - offset, max_chunk)
             chunk_data = payload[offset:offset + chunk_size]
             offset += chunk_size
-            frame = Frame.chunk(request_id, stream_id, seq, chunk_data)
+            frame = Frame.chunk(request_id, stream_id, seq, chunk_data, chunk_index, compute_checksum(chunk_data))
             self.write(frame)
             seq += 1
+            chunk_index += 1
 
         # STREAM_END
-        self.write(Frame.stream_end(request_id, stream_id))
+        self.write(Frame.stream_end(request_id, stream_id, chunk_index))
 
         # END
         self.write(Frame.end(request_id, None))
