@@ -1672,7 +1672,7 @@ class PluginRuntime:
                 raise CliError(f"Invalid media URN '{arg_def.media_urn}': {e}")
 
             # Check if this arg requires file-path to bytes conversion using pattern matching
-            from .cap import StdinSource
+            from capns.cap.definition import StdinSource
 
             file_path_pattern = MediaUrn.from_string(MEDIA_FILE_PATH)
             file_path_array_pattern = MediaUrn.from_string(MEDIA_FILE_PATH_ARRAY)
@@ -1729,7 +1729,7 @@ class PluginRuntime:
         - arg.media_urn is "media:file-path" or "media:file-path-array"
         - arg has a stdin source (indicating bytes are the canonical type)
         """
-        from .cap import StdinSource, PositionSource, CliFlagSource
+        from capns.cap.definition import StdinSource, PositionSource, CliFlagSource
 
         # Check if this arg requires file-path to bytes conversion using pattern matching
         try:
