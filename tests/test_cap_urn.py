@@ -418,13 +418,13 @@ def test_with_wildcard_tag():
     cap2 = cap.with_wildcard_tag("ext")
     assert cap2.get_tag("ext") == "*"
 
-    # Wildcard in direction (direction wildcard = "media:")
+    # Wildcard in direction — stores literal "*" (matching Rust TEST027)
     cap3 = cap.with_wildcard_tag("in")
-    assert cap3.in_spec() == "media:"
+    assert cap3.in_spec() == "*"
 
-    # Wildcard out direction (direction wildcard = "media:")
+    # Wildcard out direction — stores literal "*" (matching Rust TEST027)
     cap4 = cap.with_wildcard_tag("out")
-    assert cap4.out_spec() == "media:"
+    assert cap4.out_spec() == "*"
 
 
 # TEST028: Test bare "cap:" defaults to media: for both directions (identity morphism)

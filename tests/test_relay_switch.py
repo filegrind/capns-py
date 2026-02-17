@@ -7,7 +7,7 @@ from io import BytesIO
 
 import pytest
 
-from capns.bifaci.frame import Frame, FrameType, Limits, MessageId
+from capns.bifaci.frame import Frame, FrameType, Limits, MessageId, compute_checksum
 from capns.bifaci.io import FrameReader, FrameWriter
 from capns.bifaci.relay_switch import (
     RelaySwitch,
@@ -355,7 +355,8 @@ def test_431_continuation_frame_routing():
     switch.send_to_master(req)
 
     # Send CHUNK continuation
-    chunk = Frame.chunk(req_id, "stream1", 0, bytes([1, 2, 3]))
+    chunk_payload = bytes([1, 2, 3])
+    chunk = Frame.chunk(req_id, "stream1", 0, chunk_payload, 0, compute_checksum(chunk_payload))
     switch.send_to_master(chunk)
 
     # Send END continuation

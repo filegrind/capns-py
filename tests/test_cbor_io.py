@@ -27,6 +27,7 @@ from capns.bifaci.frame import (
     Limits,
     DEFAULT_MAX_FRAME,
     DEFAULT_MAX_CHUNK,
+    compute_checksum,
 )
 
 
@@ -141,7 +142,8 @@ def test_write_frame_enforces_max_frame_size():
     output = io.BytesIO()
 
     # Create a frame with large payload (use CHUNK frame since RES removed in Protocol v2)
-    frame = Frame.chunk(MessageId.new_uuid(), "test-stream", 0, b"x" * 2000)
+    payload = b"x" * 2000
+    frame = Frame.chunk(MessageId.new_uuid(), "test-stream", 0, payload, 0, compute_checksum(payload))
     limits = Limits(1024, 512)  # Max frame 1KB
 
     with pytest.raises(FrameTooLargeError):
@@ -420,7 +422,8 @@ def test_read_frame_enforces_limit():
     output = io.BytesIO()
 
     # Write a large frame (use CHUNK frame since RES removed in Protocol v2)
-    frame = Frame.chunk(MessageId.new_uuid(), "test-stream", 0, b"x" * 2000)
+    payload = b"x" * 2000
+    frame = Frame.chunk(MessageId.new_uuid(), "test-stream", 0, payload, 0, compute_checksum(payload))
     large_limits = Limits(10000, 5000)
     write_frame(output, frame, large_limits)
 
@@ -435,7 +438,7 @@ def test_read_frame_enforces_limit():
 # TEST229: Test frame with zero-length payload
 def test_frame_with_zero_length_payload():
     output = io.BytesIO()
-    frame = Frame.chunk(MessageId.new_uuid(), "test-stream", 0, b"")
+    frame = Frame.chunk(MessageId.new_uuid(), "test-stream", 0, b"", 0, 0)
     limits = Limits.default()
 
     write_frame(output, frame, limits)
@@ -512,7 +515,7 @@ def test_frame_encoding_preserves_binary_data():
     # Binary data with all byte values
     binary_data = bytes(range(256))
 
-    frame = Frame.chunk(MessageId.new_uuid(), "test-stream", 0, binary_data)
+    frame = Frame.chunk(MessageId.new_uuid(), "test-stream", 0, binary_data, 0, compute_checksum(binary_data))
 
     data = encode_frame(frame)
     decoded = decode_frame(data)
@@ -706,7 +709,7 @@ def test_stream_end_roundtrip():
     id = MessageId.new_uuid()
     stream_id = "stream-xyz-789"
 
-    frame = Frame.stream_end(id, stream_id)
+    frame = Frame.stream_end(id, stream_id, 0)
     encoded = encode_frame(frame)
     decoded = decode_frame(encoded)
 

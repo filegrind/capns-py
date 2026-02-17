@@ -44,6 +44,7 @@ import sys
 import os
 import json
 import io
+import asyncio
 import threading
 import queue
 import glob
@@ -52,6 +53,8 @@ from typing import Callable, Protocol, Optional, Dict, List, Any
 from abc import ABC, abstractmethod
 from dataclasses import dataclass
 import cbor2
+
+from ops import Op, OpMetadata, DryContext, WetContext, ExecutionFailedError
 
 from capns.bifaci.frame import Frame, FrameType, Limits, MessageId, DEFAULT_MAX_FRAME, DEFAULT_MAX_CHUNK, compute_checksum, SeqAssigner, FlowKey
 from capns.bifaci.io import handshake_accept, FrameReader, FrameWriter, CborError, ProtocolError
@@ -536,9 +539,99 @@ class ThreadSafeEmitter:
         self.writer.write(frame)
 
 
-# Handler function type - receives bare CBOR Frame objects
-# Handler has full streaming control - decides when to consume frames and when to produce output.
-HandlerFn = Callable[[queue.Queue, StreamEmitter, PeerInvoker], None]
+# =============================================================================
+# OP-BASED HANDLER SYSTEM — handlers implement ops.Op[None]
+# =============================================================================
+
+class Request:
+    """Bundles capns I/O for WetContext. Op handlers extract this from WetContext
+    to access streaming input frames, output emitter, and peer invocation.
+    """
+
+    def __init__(self, frames: queue.Queue, emitter: "StreamEmitter", peer: "PeerInvoker"):
+        self._frames = frames
+        self._emitter = emitter
+        self._peer = peer
+        self._consumed = False
+        self._lock = threading.Lock()
+
+    def take_frames(self) -> queue.Queue:
+        """Take the input frames queue. Can only be called once — second call raises error."""
+        with self._lock:
+            if self._consumed:
+                raise HandlerError("Input already consumed")
+            self._consumed = True
+            return self._frames
+
+    def emitter(self) -> "StreamEmitter":
+        """Access the output stream emitter."""
+        return self._emitter
+
+    def peer(self) -> "PeerInvoker":
+        """Access the peer invoker."""
+        return self._peer
+
+
+# WetContext key for the Request object.
+WET_KEY_REQUEST: str = "request"
+
+# Factory function that creates a fresh Op[None] instance per invocation.
+OpFactory = Callable[[], Op]
+
+
+class IdentityOp(Op):
+    """Standard identity handler — pure passthrough. Forwards all input chunks to output."""
+
+    async def perform(self, dry: DryContext, wet: WetContext) -> None:
+        req: Request = wet.get_required(WET_KEY_REQUEST)
+        frames = req.take_frames()
+        for frame in iter(frames.get, None):
+            if frame.frame_type == FrameType.CHUNK and frame.payload:
+                value = cbor2.loads(frame.payload)
+                req.emitter().emit_cbor(value)
+            elif frame.frame_type == FrameType.END:
+                break
+
+    def metadata(self) -> OpMetadata:
+        return OpMetadata.builder("IdentityOp") \
+            .description("Pure passthrough — forwards all input to output") \
+            .build()
+
+
+class DiscardOp(Op):
+    """Standard discard handler — terminal morphism. Drains all input, produces nothing."""
+
+    async def perform(self, dry: DryContext, wet: WetContext) -> None:
+        req: Request = wet.get_required(WET_KEY_REQUEST)
+        frames = req.take_frames()
+        for frame in iter(frames.get, None):
+            if frame is None or frame.frame_type == FrameType.END:
+                break
+
+    def metadata(self) -> OpMetadata:
+        return OpMetadata.builder("DiscardOp") \
+            .description("Terminal morphism — drains all input, produces nothing") \
+            .build()
+
+
+def dispatch_op(
+    op: Op,
+    frames: queue.Queue,
+    emitter: "StreamEmitter",
+    peer: "PeerInvoker",
+) -> None:
+    """Dispatch an Op with a Request via WetContext. Bridges sync handler threads to async Op.perform.
+
+    Raises HandlerError on Op failure.
+    """
+    req = Request(frames, emitter, peer)
+    dry = DryContext()
+    wet = WetContext()
+    wet.insert_ref(WET_KEY_REQUEST, req)
+    try:
+        asyncio.run(op.perform(dry, wet))
+    except Exception as e:
+        raise HandlerError(str(e))
 
 
 def collect_args_by_media_urn(frames: queue.Queue, media_urn: str) -> bytes:
@@ -728,7 +821,7 @@ class PluginRuntime:
         and used for CLI argument parsing (CLI mode).
         **Plugins MUST provide a manifest - there is no fallback.**
         """
-        self.handlers: Dict[str, HandlerFn] = {}
+        self.handlers: Dict[str, OpFactory] = {}
         self.manifest_data = manifest_data
         self.limits = Limits.default()
 
@@ -763,87 +856,30 @@ class PluginRuntime:
     def _register_standard_caps(self) -> None:
         """Register the standard identity and discard handlers.
 
-        Plugin authors can override either by calling register_raw() after construction.
+        Plugin authors can override either by calling register_op() after construction.
         """
         from capns.standard.caps import CAP_IDENTITY, CAP_DISCARD
 
-        # Identity handler — pure passthrough. Forwards all input chunks to output.
-        def identity_handler(frames: queue.Queue, emitter: StreamEmitter, peer: PeerInvoker) -> None:
-            while True:
-                frame = frames.get()
-                if frame is None:
-                    break
-                if frame.frame_type == FrameType.CHUNK:
-                    if frame.payload:
-                        # Forward chunk as-is
-                        import cbor2
-                        value = cbor2.loads(frame.payload)
-                        emitter.emit_cbor(value)
-                elif frame.frame_type == FrameType.END:
-                    break
+        # Auto-register if not already present (mirrors Rust: find_handler check)
+        if self.find_handler(CAP_IDENTITY) is None:
+            self.register_op_type(CAP_IDENTITY, IdentityOp)
 
-        # Discard handler — terminal morphism. Drains all input, produces nothing.
-        def discard_handler(frames: queue.Queue, emitter: StreamEmitter, peer: PeerInvoker) -> None:
-            while True:
-                frame = frames.get()
-                if frame is None or frame.frame_type == FrameType.END:
-                    break
+        if self.find_handler(CAP_DISCARD) is None:
+            self.register_op_type(CAP_DISCARD, DiscardOp)
 
-        # Auto-register if not already present
-        if CAP_IDENTITY not in self.handlers:
-            self.handlers[CAP_IDENTITY] = identity_handler
-
-        if CAP_DISCARD not in self.handlers:
-            self.handlers[CAP_DISCARD] = discard_handler
-
-    def register(self, cap_urn: str, handler: Callable[[Any, StreamEmitter, PeerInvoker], None]) -> None:
-        """Register a handler for a cap URN with automatic JSON deserialization.
-
-        The handler receives:
-        - Deserialized JSON request object
-        - An emitter for streaming output
-        - A peer invoker for calling caps on the host
-
-        Handler must emit all output via emitter (no return value).
-
-        **Thread safety**: Handlers run in separate threads, so they must be
-        thread-safe. The emitter and peer invoker are thread-safe and can be used freely.
-
-        **Peer invocation**: Use the `peer` parameter to invoke caps on the host.
-        This is useful for sandboxed plugins that need to delegate operations
-        (like network access) to the host.
+    def register_op(self, cap_urn: str, factory: OpFactory) -> None:
+        """Register an Op factory for a cap URN.
+        The factory creates a fresh Op[None] instance per invocation.
         """
-        def wrapper(frames: queue.Queue, emitter: StreamEmitter, peer: PeerInvoker) -> None:
-            # Collect first argument's payload from frame stream
-            # For simplified register() API, we assume single JSON argument
-            payload_chunks = []
-            for frame in iter(frames.get, None):
-                if frame.frame_type == FrameType.CHUNK and frame.payload:
-                    payload_chunks.append(frame.payload)
+        self.handlers[cap_urn] = factory
 
-            payload = b''.join(payload_chunks)
+    def register_op_type(self, cap_urn: str, op_class: type) -> None:
+        """Register an Op class for a cap URN. Instance created via op_class() per invocation."""
+        self.handlers[cap_urn] = op_class
 
-            # Deserialize request from payload bytes (JSON format)
-            try:
-                request = json.loads(payload)
-            except Exception as e:
-                raise DeserializeError(f"Failed to parse request: {e}")
-
-            handler(request, emitter, peer)
-
-        self.handlers[cap_urn] = wrapper
-
-    def register_raw(self, cap_urn: str, handler: HandlerFn) -> None:
-        """Register a raw handler that receives bare Frame objects.
-
-        Use this when you need full control over frame processing.
-        The handler receives a queue of Frame objects, emitter, and peer invoker.
-        """
-        self.handlers[cap_urn] = handler
-
-    def find_handler(self, cap_urn: str) -> Optional[HandlerFn]:
-        """Find a handler for a cap URN.
-        Returns the handler if found, None otherwise.
+    def find_handler(self, cap_urn: str) -> Optional[OpFactory]:
+        """Find an Op factory for a cap URN.
+        Returns the factory if found, None otherwise.
 
         Matching direction: request.accepts(registered_cap) — the incoming request
         (pattern) must accept the registered cap (instance). Mirrors Rust exactly:
@@ -951,9 +987,9 @@ class PluginRuntime:
                 f"Unknown subcommand '{subcommand}'. Run with --help to see available commands."
             )
 
-        # Find handler
-        handler = self.find_handler(cap.urn_string())
-        if handler is None:
+        # Find handler factory
+        factory = self.find_handler(cap.urn_string())
+        if factory is None:
             raise NoHandlerError(f"No handler registered for cap '{cap.urn_string()}'")
 
         # Build arguments from CLI
@@ -985,9 +1021,9 @@ class PluginRuntime:
         emitter = CliStreamEmitter()
         peer = NoPeerInvoker()
 
-        # Invoke handler - handler receives Frame sequence
+        # Invoke Op handler
         try:
-            handler(frames, emitter, peer)
+            dispatch_op(factory(), frames, emitter, peer)
         except Exception as e:
             # Output error as JSON to stderr
             error_json = {
@@ -1180,9 +1216,9 @@ class PluginRuntime:
                             pending_req.ended = True
 
                 if pending_req:
-                    # Find handler
-                    handler = self.find_handler(pending_req.cap_urn)
-                    if not handler:
+                    # Find handler factory
+                    factory = self.find_handler(pending_req.cap_urn)
+                    if not factory:
                         err_frame = Frame.err(frame.id, "NO_HANDLER", f"No handler registered for cap: {pending_req.cap_urn}")
                         err_frame.routing_id = pending_req.routing_id  # Propagate XID
                         try:
@@ -1197,7 +1233,7 @@ class PluginRuntime:
                     _request_id = frame.id
                     _streams_snapshot = list(pending_req.streams)
                     _cap_urn = pending_req.cap_urn
-                    _handler = handler
+                    _factory = factory
                     _max_chunk = self.limits.max_chunk
                     _routing_id = pending_req.routing_id  # XID from incoming REQ
 
@@ -1205,7 +1241,7 @@ class PluginRuntime:
                         request_id=_request_id,
                         streams_snapshot=_streams_snapshot,
                         cap_urn_clone=_cap_urn,
-                        handler=_handler,
+                        factory=_factory,
                         max_chunk=_max_chunk,
                         routing_id=_routing_id,
                     ):
@@ -1243,9 +1279,9 @@ class PluginRuntime:
                                 print(f"[PluginRuntime] Failed to write error response: {write_err}", file=sys.stderr)
                             return
 
-                        # Execute handler — receives bare Frame objects
+                        # Execute Op handler
                         try:
-                            handler(frames, emitter, peer_invoker)
+                            dispatch_op(factory(), frames, emitter, peer_invoker)
 
                             # Finalize: STREAM_END + END (seq assigned by SyncFrameWriter)
                             emitter.finalize()

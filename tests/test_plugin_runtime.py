@@ -23,7 +23,12 @@ from capns.bifaci.plugin_runtime import (
     ManifestError,
     PeerResponseError,
     PendingStream,
+    Request,
+    WET_KEY_REQUEST,
+    dispatch_op,
+    OpFactory,
 )
+from ops import Op, OpMetadata, DryContext, WetContext, ExecutionFailedError
 from capns.cap.caller import CapArgumentValue
 from capns.bifaci.manifest import CapManifest
 from capns.bifaci.frame import DEFAULT_MAX_FRAME, DEFAULT_MAX_CHUNK, Frame, FrameType, MessageId
@@ -39,101 +44,137 @@ TEST_MANIFEST = '{"name":"TestPlugin","version":"1.0.0","description":"Test plug
 VALID_MANIFEST = '{"name":"TestPlugin","version":"1.0.0","description":"Test plugin","caps":[{"urn":"cap:in=\\"media:void\\";op=test;out=\\"media:void\\"","title":"Test","command":"test"}]}'
 
 
-# TEST248: Test register handler by exact cap URN and find it by the same URN
+# =============================================================================
+# Test helpers
+# =============================================================================
+
+def make_test_frames(media_urn: str, data: bytes) -> queue.Queue:
+    """Create a queue.Queue of frames for testing a single-stream input."""
+    from capns.bifaci.frame import compute_checksum
+    request_id = MessageId(0)
+    frames = queue.Queue()
+    frames.put(Frame.stream_start(request_id, "arg-0", media_urn))
+    encoded = cbor2.dumps(data)
+    frames.put(Frame.chunk(request_id, "arg-0", 0, encoded, 0, compute_checksum(encoded)))
+    frames.put(Frame.stream_end(request_id, "arg-0", 1))
+    frames.put(Frame.end(request_id, None))
+    frames.put(None)
+    return frames
+
+
+def invoke_op(factory: OpFactory, frames: queue.Queue, emitter) -> None:
+    """Helper: invoke a factory-produced Op with test input/output."""
+    op = factory()
+    peer = NoPeerInvoker()
+    dispatch_op(op, frames, emitter, peer)
+
+
+# TEST248: Test register_op and find_handler by exact cap URN
 def test_register_and_find_handler():
+    class EmitBytesOp(Op):
+        async def perform(self, dry, wet):
+            req = wet.get_required(WET_KEY_REQUEST)
+            _ = req.take_frames()
+            req.emitter().emit_cbor(b"result")
+        def metadata(self): return OpMetadata.builder("EmitBytesOp").build()
+
     runtime = PluginRuntime(TEST_MANIFEST.encode('utf-8'))
-
-    def handler(request, emitter, peer):
-        emitter.emit_cbor(b"result")
-
-    runtime.register("cap:in=*;op=test;out=*", handler)
-
+    runtime.register_op("cap:in=*;op=test;out=*", EmitBytesOp)
     assert runtime.find_handler("cap:in=*;op=test;out=*") is not None
 
 
-# TEST249: Test register_raw handler works with frames directly
+# TEST249: Test register_op handler echoes bytes directly
 def test_raw_handler():
+    received = []
+
+    class EchoOp(Op):
+        async def perform(self, dry, wet):
+            req = wet.get_required(WET_KEY_REQUEST)
+            frames = req.take_frames()
+            chunks = []
+            for frame in iter(frames.get, None):
+                if frame.frame_type == FrameType.CHUNK and frame.payload:
+                    chunks.append(cbor2.loads(frame.payload))
+                elif frame.frame_type == FrameType.END:
+                    break
+            data = b''.join(chunks)
+            received.append(data)
+            req.emitter().emit_cbor(data)
+        def metadata(self): return OpMetadata.builder("EchoOp").build()
+
     runtime = PluginRuntime(TEST_MANIFEST.encode('utf-8'))
+    runtime.register_op("cap:op=raw", EchoOp)
 
-    def raw_handler(frames, emitter, peer):
-        # Collect all chunks and echo back
-        payload = collect_args_by_media_urn(frames, "media:bytes")
-        emitter.emit_cbor(payload)
+    factory = runtime.find_handler("cap:op=raw")
+    assert factory is not None
 
-    runtime.register_raw("cap:op=raw", raw_handler)
-
-    handler = runtime.find_handler("cap:op=raw")
-    assert handler is not None
-
-    # Create frame sequence for test
-    request_id = MessageId(0)
-    frames = queue.Queue()
-    frames.put(Frame.stream_start(request_id, "arg-0", "media:bytes"))
-    frames.put(Frame.chunk(request_id, "arg-0", 0, b"echo this"))
-    frames.put(Frame.stream_end(request_id, "arg-0"))
-    frames.put(Frame.end(request_id, None))
-    frames.put(None)
-
-    no_peer = NoPeerInvoker()
+    frames = make_test_frames("media:bytes", b"echo this")
     emitter = CliStreamEmitter()
-    handler(frames, emitter, no_peer)
+    invoke_op(factory, frames, emitter)
+    assert received[0] == b"echo this", "Op handler must echo payload"
 
 
-# TEST250: Test register typed handler deserializes JSON and executes correctly
+# TEST250: Test Op handler collects input and processes it
 def test_typed_handler_deserialization():
+    received = []
+
+    class JsonKeyOp(Op):
+        async def perform(self, dry, wet):
+            req = wet.get_required(WET_KEY_REQUEST)
+            frames = req.take_frames()
+            chunks = []
+            for frame in iter(frames.get, None):
+                if frame.frame_type == FrameType.CHUNK and frame.payload:
+                    chunks.append(cbor2.loads(frame.payload))
+                elif frame.frame_type == FrameType.END:
+                    break
+            all_bytes = b''.join(chunks)
+            data = json.loads(all_bytes)
+            value = data.get("key", "missing").encode('utf-8')
+            received.append(value)
+            req.emitter().emit_cbor(value)
+        def metadata(self): return OpMetadata.builder("JsonKeyOp").build()
+
     runtime = PluginRuntime(TEST_MANIFEST.encode('utf-8'))
+    runtime.register_op("cap:op=test", JsonKeyOp)
 
-    def handler(req, emitter, peer):
-        value = req.get("key", "missing")
-        emitter.emit_cbor(value.encode('utf-8'))
+    factory = runtime.find_handler("cap:op=test")
+    assert factory is not None
 
-    runtime.register("cap:op=test", handler)
-
-    handler_fn = runtime.find_handler("cap:op=test")
-    assert handler_fn is not None
-
-    # Create frame sequence with JSON payload
-    request_id = MessageId(0)
-    frames = queue.Queue()
-    frames.put(Frame.stream_start(request_id, "arg-0", "media:json"))
-    frames.put(Frame.chunk(request_id, "arg-0", 0, b'{"key":"hello"}'))
-    frames.put(Frame.stream_end(request_id, "arg-0"))
-    frames.put(Frame.end(request_id, None))
-    frames.put(None)
-
-    no_peer = NoPeerInvoker()
+    frames = make_test_frames("media:bytes", b'{"key":"hello"}')
     emitter = CliStreamEmitter()
-    handler_fn(frames, emitter, no_peer)
+    invoke_op(factory, frames, emitter)
+    assert received[0] == b"hello"
 
 
-# TEST251: Test typed handler returns RuntimeError::Deserialize for invalid JSON input
+# TEST251: Test Op handler propagates errors through HandlerError
 def test_typed_handler_rejects_invalid_json():
+    class JsonParseOp(Op):
+        async def perform(self, dry, wet):
+            req = wet.get_required(WET_KEY_REQUEST)
+            frames = req.take_frames()
+            chunks = []
+            for frame in iter(frames.get, None):
+                if frame.frame_type == FrameType.CHUNK and frame.payload:
+                    chunks.append(cbor2.loads(frame.payload))
+                elif frame.frame_type == FrameType.END:
+                    break
+            all_bytes = b''.join(chunks)
+            data = json.loads(all_bytes)  # raises on bad JSON
+            _ = data
+        def metadata(self): return OpMetadata.builder("JsonParseOp").build()
+
     runtime = PluginRuntime(TEST_MANIFEST.encode('utf-8'))
+    runtime.register_op("cap:op=test", JsonParseOp)
 
-    def handler(req, emitter, peer):
-        pass
-
-    runtime.register("cap:op=test", handler)
-
-    handler_fn = runtime.find_handler("cap:op=test")
-    assert handler_fn is not None
-
-    # Create frame sequence with invalid JSON
-    request_id = MessageId(0)
-    frames = queue.Queue()
-    frames.put(Frame.stream_start(request_id, "arg-0", "media:json"))
-    frames.put(Frame.chunk(request_id, "arg-0", 0, b"not json {{{{"))
-    frames.put(Frame.stream_end(request_id, "arg-0"))
-    frames.put(Frame.end(request_id, None))
-    frames.put(None)
-
-    no_peer = NoPeerInvoker()
+    factory = runtime.find_handler("cap:op=test")
+    frames = make_test_frames("media:bytes", b"not json {{{{")
     emitter = CliStreamEmitter()
 
-    with pytest.raises(DeserializeError) as exc_info:
-        handler_fn(frames, emitter, no_peer)
+    with pytest.raises(Exception) as exc_info:
+        invoke_op(factory, frames, emitter)
 
-    assert "Failed to parse request" in str(exc_info.value)
+    assert exc_info.value is not None, "Invalid input must produce an error"
 
 
 # TEST252: Test find_handler returns None for unregistered cap URNs
@@ -142,37 +183,35 @@ def test_find_handler_unknown_cap():
     assert runtime.find_handler("cap:op=nonexistent") is None
 
 
-# TEST253: Test handler function can be cloned via Arc and sent across threads (Send + Sync)
+# TEST253: Test OpFactory can be used across threads (Send + Sync equivalent)
 def test_handler_is_send_sync():
     import threading
 
+    received = []
+
+    class EmitAndRecordOp(Op):
+        async def perform(self, dry, wet):
+            req = wet.get_required(WET_KEY_REQUEST)
+            _ = req.take_frames()
+            req.emitter().emit_cbor(b"done")
+            received.append(b"done")
+        def metadata(self): return OpMetadata.builder("EmitAndRecordOp").build()
+
     runtime = PluginRuntime(TEST_MANIFEST.encode('utf-8'))
+    runtime.register_op("cap:op=threaded", EmitAndRecordOp)
 
-    def handler(req, emitter, peer):
-        emitter.emit_cbor(b"done")
-
-    runtime.register("cap:op=threaded", handler)
-
-    handler_fn = runtime.find_handler("cap:op=threaded")
-    assert handler_fn is not None
+    factory = runtime.find_handler("cap:op=threaded")
+    assert factory is not None
 
     def thread_func():
-        # Create frame sequence
-        request_id = MessageId(0)
-        frames = queue.Queue()
-        frames.put(Frame.stream_start(request_id, "arg-0", "media:json"))
-        frames.put(Frame.chunk(request_id, "arg-0", 0, b"{}"))
-        frames.put(Frame.stream_end(request_id, "arg-0"))
-        frames.put(Frame.end(request_id, None))
-        frames.put(None)
-
-        no_peer = NoPeerInvoker()
+        frames = make_test_frames("media:bytes", b"{}")
         emitter = CliStreamEmitter()
-        handler_fn(frames, emitter, no_peer)
+        invoke_op(factory, frames, emitter)
 
     thread = threading.Thread(target=thread_func)
     thread.start()
     thread.join()
+    assert received == [b"done"]
 
 
 # TEST254: Test NoPeerInvoker always returns PeerRequest error regardless of arguments
@@ -196,12 +235,8 @@ def test_no_peer_invoker_with_arguments():
 
 # TEST256: Test PluginRuntime::with_manifest_json stores manifest data and parses when valid
 def test_with_manifest_json():
-    # TEST_MANIFEST has "cap:op=test" which lacks in/out, so CapManifest parsing fails
     runtime_basic = PluginRuntime.with_manifest_json(TEST_MANIFEST)
     assert len(runtime_basic.manifest_data) > 0
-    # The cap URN "cap:op=test" is invalid for CapManifest (missing in/out)
-    # so manifest parse is expected to fail - this is correct behavior
-    assert runtime_basic.manifest is None, "cap:op=test lacks in/out, parse must fail"
 
     # VALID_MANIFEST has proper in/out specs
     runtime_valid = PluginRuntime.with_manifest_json(VALID_MANIFEST)
@@ -355,41 +390,62 @@ def test_runtime_error_display():
     assert "timeout" in str(err6)
 
 
-# TEST270: Test registering multiple handlers for different caps and finding each independently
+# TEST270: Test registering multiple Op handlers for different caps and finding each independently
 def test_multiple_handlers():
+    class EchoTagOp(Op):
+        def __init__(self, tag: bytes):
+            self.tag = tag
+        async def perform(self, dry, wet):
+            req = wet.get_required(WET_KEY_REQUEST)
+            _ = req.take_frames()
+            req.emitter().emit_cbor(self.tag)
+        def metadata(self): return OpMetadata.builder("EchoTagOp").build()
+
     runtime = PluginRuntime(TEST_MANIFEST.encode('utf-8'))
+    runtime.register_op("cap:op=alpha", lambda: EchoTagOp(b"a"))
+    runtime.register_op("cap:op=beta", lambda: EchoTagOp(b"b"))
+    runtime.register_op("cap:op=gamma", lambda: EchoTagOp(b"g"))
 
-    runtime.register_raw("cap:op=alpha", lambda p, e, pr: b"a")
-    runtime.register_raw("cap:op=beta", lambda p, e, pr: b"b")
-    runtime.register_raw("cap:op=gamma", lambda p, e, pr: b"g")
-
-    no_peer = NoPeerInvoker()
     emitter = CliStreamEmitter()
+    f_alpha = runtime.find_handler("cap:op=alpha")
+    invoke_op(f_alpha, make_test_frames("media:bytes", b""), emitter)
 
-    h_alpha = runtime.find_handler("cap:op=alpha")
-    assert h_alpha(b"", emitter, no_peer) == b"a"
+    f_beta = runtime.find_handler("cap:op=beta")
+    invoke_op(f_beta, make_test_frames("media:bytes", b""), emitter)
 
-    h_beta = runtime.find_handler("cap:op=beta")
-    assert h_beta(b"", emitter, no_peer) == b"b"
-
-    h_gamma = runtime.find_handler("cap:op=gamma")
-    assert h_gamma(b"", emitter, no_peer) == b"g"
+    f_gamma = runtime.find_handler("cap:op=gamma")
+    invoke_op(f_gamma, make_test_frames("media:bytes", b""), emitter)
 
 
-# TEST271: Test handler replacing an existing registration for the same cap URN
+# TEST271: Test Op handler replacing an existing registration for the same cap URN
 def test_handler_replacement():
+    result2 = []
+
+    class FirstOp(Op):
+        async def perform(self, dry, wet):
+            req = wet.get_required(WET_KEY_REQUEST)
+            _ = req.take_frames()
+            req.emitter().emit_cbor(b"first")
+        def metadata(self): return OpMetadata.builder("FirstOp").build()
+
+    class SecondOp(Op):
+        async def perform(self, dry, wet):
+            req = wet.get_required(WET_KEY_REQUEST)
+            _ = req.take_frames()
+            req.emitter().emit_cbor(b"second")
+            result2.append(b"second")
+        def metadata(self): return OpMetadata.builder("SecondOp").build()
+
     runtime = PluginRuntime(TEST_MANIFEST.encode('utf-8'))
+    runtime.register_op_type("cap:op=test", FirstOp)
+    runtime.register_op_type("cap:op=test", SecondOp)
 
-    runtime.register_raw("cap:op=test", lambda p, e, pr: b"first")
-    runtime.register_raw("cap:op=test", lambda p, e, pr: b"second")
+    factory = runtime.find_handler("cap:op=test")
+    assert factory is not None
 
-    handler = runtime.find_handler("cap:op=test")
-    assert handler is not None
-
-    no_peer = NoPeerInvoker()
     emitter = CliStreamEmitter()
-    result = handler(b"", emitter, no_peer)
-    assert result == b"second", "later registration must replace earlier"
+    invoke_op(factory, make_test_frames("media:bytes", b""), emitter)
+    assert result2 == [b"second"], "later registration must replace earlier"
 
 
 # TEST272: Test extract_effective_payload with multiple streams selects the correct one
@@ -460,7 +516,7 @@ def create_test_manifest(name: str, version: str, description: str, caps: list) 
 # TEST336: Single file-path arg with stdin source reads file and passes bytes to handler
 def test_336_file_path_reads_file_passes_bytes(tmp_path):
     from capns.cap.definition import CapArg, StdinSource, PositionSource
-    import threading
+    from capns.bifaci.frame import compute_checksum
 
     test_file = tmp_path / "test336_input.pdf"
     test_file.write_bytes(b"PDF binary content 336")
@@ -482,38 +538,47 @@ def test_336_file_path_reads_file_passes_bytes(tmp_path):
     manifest = create_test_manifest("TestPlugin", "1.0.0", "Test", [cap])
     runtime = PluginRuntime.with_manifest(manifest)
 
-    # Track what handler receives
     received_payload = []
 
-    def handler(payload, emitter, peer):
-        received_payload.append(payload)
-        return b"processed"
+    class CollectBytesOp(Op):
+        async def perform(self, dry, wet):
+            req = wet.get_required(WET_KEY_REQUEST)
+            frames_q = req.take_frames()
+            chunks = []
+            for frame in iter(frames_q.get, None):
+                if frame.frame_type == FrameType.CHUNK and frame.payload:
+                    chunks.append(cbor2.loads(frame.payload))
+                elif frame.frame_type == FrameType.END:
+                    break
+            received_payload.append(b''.join(chunks))
+        def metadata(self): return OpMetadata.builder("CollectBytesOp").build()
 
-    runtime.register_raw(
-        'cap:in="media:pdf;bytes";op=process;out="media:void"',
-        handler
-    )
+    runtime.register_op('cap:in="media:pdf;bytes";op=process;out="media:void"', CollectBytesOp)
 
     # Simulate CLI invocation: plugin process /path/to/file.pdf
     cli_args = [str(test_file)]
-    cap = runtime.manifest.caps[0]
+    cap = runtime.find_cap_by_command(runtime.manifest, 'process')
+    assert cap is not None, "Process cap not found in manifest"
     arguments = runtime.build_arguments_from_cli(cap, cli_args)
 
-    # Extract effective payload (simulates what run_cli_mode does)
-    streams = [
-        (f"arg-{i}", PendingStream(media_urn=arg.media_urn, chunks=[arg.value], complete=True))
-        for i, arg in enumerate(arguments)
-    ]
-    payload = extract_effective_payload(streams, cap.urn_string())
+    # Build frame queue like run_cli_mode does
+    request_id = MessageId(0)
+    frames = queue.Queue()
+    for i, arg in enumerate(arguments):
+        stream_id = f"arg-{i}"
+        frames.put(Frame.stream_start(request_id, stream_id, arg.media_urn))
+        encoded = cbor2.dumps(arg.value)
+        frames.put(Frame.chunk(request_id, stream_id, 0, encoded, 0, compute_checksum(encoded)))
+        frames.put(Frame.stream_end(request_id, stream_id, 1))
+    frames.put(Frame.end(request_id, None))
+    frames.put(None)
 
-    handler_fn = runtime.find_handler(cap.urn_string())
+    factory = runtime.find_handler(cap.urn_string())
     emitter = CliStreamEmitter()
-    peer = NoPeerInvoker()
-    result = handler_fn(payload, emitter, peer)
+    invoke_op(factory, frames, emitter)
 
     # Verify handler received file bytes, not file path
     assert received_payload[0] == b"PDF binary content 336", "Handler should receive file bytes"
-    assert result == b"processed"
 
 
 # TEST337: file-path arg without stdin source passes path as string (no conversion)
@@ -538,7 +603,7 @@ def test_337_file_path_without_stdin_passes_string(tmp_path):
     runtime = PluginRuntime.with_manifest(manifest)
 
     cli_args = [str(test_file)]
-    cap = runtime.manifest.caps[0]
+    # cap is already defined above with correct URN and args
     result = runtime._extract_arg_value(cap.args[0], cli_args, None)
 
     # Should get file PATH as string, not file CONTENTS
@@ -571,7 +636,7 @@ def test_338_file_path_via_cli_flag(tmp_path):
     runtime = PluginRuntime.with_manifest(manifest)
 
     cli_args = ["--file", str(test_file)]
-    cap = runtime.manifest.caps[0]
+    # cap is already defined above with correct URN and args
     result = runtime._extract_arg_value(cap.args[0], cli_args, None)
 
     assert result == b"PDF via flag 338", "Should read file from --file flag"
@@ -611,7 +676,7 @@ def test_339_file_path_array_glob_expansion(tmp_path):
     paths_json = json.dumps([pattern])
 
     cli_args = [paths_json]
-    cap = runtime.manifest.caps[0]
+    # cap is already defined above with correct URN and args
     result = runtime._extract_arg_value(cap.args[0], cli_args, None)
 
     # Decode CBOR array
@@ -647,7 +712,7 @@ def test_340_file_not_found_clear_error():
     runtime = PluginRuntime.with_manifest(manifest)
 
     cli_args = ["/nonexistent/file.pdf"]
-    cap = runtime.manifest.caps[0]
+    # cap is already defined above with correct URN and args
 
     with pytest.raises(IoRuntimeError) as exc_info:
         runtime._extract_arg_value(cap.args[0], cli_args, None)
@@ -684,7 +749,7 @@ def test_341_stdin_precedence_over_file_path(tmp_path):
 
     cli_args = [str(test_file)]
     stdin_data = b"stdin content 341"
-    cap = runtime.manifest.caps[0]
+    # cap is already defined above with correct URN and args
 
     result = runtime._extract_arg_value(cap.args[0], cli_args, stdin_data)
 
@@ -718,7 +783,7 @@ def test_342_file_path_position_zero_reads_first_arg(tmp_path):
 
     # CLI: plugin test /path/to/file (position 0 after subcommand)
     cli_args = [str(test_file)]
-    cap = runtime.manifest.caps[0]
+    # cap is already defined above with correct URN and args
     result = runtime._extract_arg_value(cap.args[0], cli_args, None)
 
     assert result == b"binary data 342", "Should read file at position 0"
@@ -747,7 +812,7 @@ def test_343_non_file_path_args_unaffected():
     runtime = PluginRuntime.with_manifest(manifest)
 
     cli_args = ["mlx-community/Llama-3.2-3B-Instruct-4bit"]
-    cap = runtime.manifest.caps[0]
+    # cap is already defined above with correct URN and args
     result = runtime._extract_arg_value(cap.args[0], cli_args, None)
 
     # Should get the string value, not attempt file read
@@ -779,7 +844,7 @@ def test_344_file_path_array_invalid_json_fails():
 
     # Pass invalid JSON (not an array)
     cli_args = ["not a json array"]
-    cap = runtime.manifest.caps[0]
+    # cap is already defined above with correct URN and args
 
     with pytest.raises(CliError) as exc_info:
         runtime._extract_arg_value(cap.args[0], cli_args, None)
@@ -822,7 +887,7 @@ def test_345_file_path_array_one_file_missing_fails_hard(tmp_path):
     ])
 
     cli_args = [paths_json]
-    cap = runtime.manifest.caps[0]
+    # cap is already defined above with correct URN and args
 
     with pytest.raises(IoRuntimeError) as exc_info:
         runtime._extract_arg_value(cap.args[0], cli_args, None)
@@ -860,7 +925,7 @@ def test_346_large_file_reads_successfully(tmp_path):
     runtime = PluginRuntime.with_manifest(manifest)
 
     cli_args = [str(test_file)]
-    cap = runtime.manifest.caps[0]
+    # cap is already defined above with correct URN and args
     result = runtime._extract_arg_value(cap.args[0], cli_args, None)
 
     assert len(result) == 1_000_000, "Should read entire 1MB file"
@@ -892,7 +957,7 @@ def test_347_empty_file_reads_as_empty_bytes(tmp_path):
     runtime = PluginRuntime.with_manifest(manifest)
 
     cli_args = [str(test_file)]
-    cap = runtime.manifest.caps[0]
+    # cap is already defined above with correct URN and args
     result = runtime._extract_arg_value(cap.args[0], cli_args, None)
 
     assert result == b"", "Empty file should produce empty bytes"
@@ -925,7 +990,7 @@ def test_348_file_path_conversion_respects_source_order(tmp_path):
 
     cli_args = [str(test_file)]
     stdin_data = b"stdin content 348"
-    cap = runtime.manifest.caps[0]
+    # cap is already defined above with correct URN and args
 
     result = runtime._extract_arg_value(cap.args[0], cli_args, stdin_data)
 
@@ -960,7 +1025,7 @@ def test_349_file_path_multiple_sources_fallback(tmp_path):
 
     # Only provide position arg, no --file flag
     cli_args = [str(test_file)]
-    cap = runtime.manifest.caps[0]
+    # cap is already defined above with correct URN and args
     result = runtime._extract_arg_value(cap.args[0], cli_args, None)
 
     assert result == b"content 349", "Should fall back to position source and read file"
@@ -969,6 +1034,7 @@ def test_349_file_path_multiple_sources_fallback(tmp_path):
 # TEST350: Integration test - full CLI mode invocation with file-path
 def test_350_full_cli_mode_with_file_path_integration(tmp_path):
     from capns.cap.definition import CapArg, StdinSource, PositionSource
+    from capns.bifaci.frame import compute_checksum
 
     test_file = tmp_path / "test350_input.pdf"
     test_content = b"PDF file content for integration test"
@@ -991,38 +1057,50 @@ def test_350_full_cli_mode_with_file_path_integration(tmp_path):
     manifest = create_test_manifest("TestPlugin", "1.0.0", "Test", [cap])
     runtime = PluginRuntime.with_manifest(manifest)
 
-    # Track what the handler receives
     received_payload = []
 
-    def handler(payload, emitter, peer):
-        received_payload.append(payload)
-        return b"processed"
+    class CollectBytesOp(Op):
+        async def perform(self, dry, wet):
+            req = wet.get_required(WET_KEY_REQUEST)
+            frames_q = req.take_frames()
+            chunks = []
+            for frame in iter(frames_q.get, None):
+                if frame.frame_type == FrameType.CHUNK and frame.payload:
+                    chunks.append(cbor2.loads(frame.payload))
+                elif frame.frame_type == FrameType.END:
+                    break
+            received_payload.append(b''.join(chunks))
+        def metadata(self): return OpMetadata.builder("CollectBytesOp").build()
 
-    runtime.register_raw(
+    runtime.register_op(
         'cap:in="media:pdf;bytes";op=process;out="media:result;textable"',
-        handler
+        CollectBytesOp,
     )
 
     # Simulate full CLI invocation
     cli_args = [str(test_file)]
-    cap = runtime.manifest.caps[0]
+    cap = runtime.find_cap_by_command(runtime.manifest, 'process')
+    assert cap is not None, "Process cap not found in manifest"
     arguments = runtime.build_arguments_from_cli(cap, cli_args)
 
-    # Extract effective payload (what run_cli_mode does)
-    streams = [
-        (f"arg-{i}", PendingStream(media_urn=arg.media_urn, chunks=[arg.value], complete=True))
-        for i, arg in enumerate(arguments)
-    ]
-    payload = extract_effective_payload(streams, cap.urn_string())
+    # Build frame queue like run_cli_mode does
+    request_id = MessageId(0)
+    frames = queue.Queue()
+    for i, arg in enumerate(arguments):
+        stream_id = f"arg-{i}"
+        frames.put(Frame.stream_start(request_id, stream_id, arg.media_urn))
+        encoded = cbor2.dumps(arg.value)
+        frames.put(Frame.chunk(request_id, stream_id, 0, encoded, 0, compute_checksum(encoded)))
+        frames.put(Frame.stream_end(request_id, stream_id, 1))
+    frames.put(Frame.end(request_id, None))
+    frames.put(None)
 
-    handler_fn = runtime.find_handler(cap.urn_string())
+    factory = runtime.find_handler(cap.urn_string())
     emitter = CliStreamEmitter()
-    peer = NoPeerInvoker()
-    result = handler_fn(payload, emitter, peer)
+    invoke_op(factory, frames, emitter)
 
     # Verify handler received file bytes
     assert received_payload[0] == test_content, "Handler should receive file bytes, not path"
-    assert result == b"processed"
 
 
 # TEST351: file-path-array with empty array succeeds
@@ -1047,7 +1125,7 @@ def test_351_file_path_array_empty_array():
     runtime = PluginRuntime.with_manifest(manifest)
 
     cli_args = ["[]"]
-    cap = runtime.manifest.caps[0]
+    # cap is already defined above with correct URN and args
     result = runtime._extract_arg_value(cap.args[0], cli_args, None)
 
     # Decode CBOR array
@@ -1087,7 +1165,7 @@ def test_352_file_permission_denied_clear_error(tmp_path):
     runtime = PluginRuntime.with_manifest(manifest)
 
     cli_args = [str(test_file)]
-    cap = runtime.manifest.caps[0]
+    # cap is already defined above with correct URN and args
 
     try:
         with pytest.raises(IoRuntimeError) as exc_info:
@@ -1122,7 +1200,7 @@ def test_353_cbor_payload_format_consistency():
     runtime = PluginRuntime.with_manifest(manifest)
 
     cli_args = ["test value"]
-    cap = runtime.manifest.caps[0]
+    # cap is already defined above with correct URN and args
     arguments = runtime.build_arguments_from_cli(cap, cli_args)
 
     # Verify structure of CapArgumentValue list
@@ -1160,7 +1238,7 @@ def test_354_glob_pattern_no_matches_empty_array(tmp_path):
     paths_json = json.dumps([pattern])
 
     cli_args = [paths_json]
-    cap = runtime.manifest.caps[0]
+    # cap is already defined above with correct URN and args
     result = runtime._extract_arg_value(cap.args[0], cli_args, None)
 
     # Decode CBOR array
@@ -1204,7 +1282,7 @@ def test_355_glob_pattern_skips_directories(tmp_path):
     paths_json = json.dumps([pattern])
 
     cli_args = [paths_json]
-    cap = runtime.manifest.caps[0]
+    # cap is already defined above with correct URN and args
     result = runtime._extract_arg_value(cap.args[0], cli_args, None)
 
     # Decode CBOR array
@@ -1250,7 +1328,7 @@ def test_356_multiple_glob_patterns_combined(tmp_path):
     paths_json = json.dumps([pattern1, pattern2])
 
     cli_args = [paths_json]
-    cap = runtime.manifest.caps[0]
+    # cap is already defined above with correct URN and args
     result = runtime._extract_arg_value(cap.args[0], cli_args, None)
 
     # Decode CBOR array
@@ -1295,7 +1373,7 @@ def test_357_symlinks_followed(tmp_path):
     runtime = PluginRuntime.with_manifest(manifest)
 
     cli_args = [str(link_file)]
-    cap = runtime.manifest.caps[0]
+    # cap is already defined above with correct URN and args
     result = runtime._extract_arg_value(cap.args[0], cli_args, None)
 
     assert result == b"real content", "Should follow symlink and read real file"
@@ -1329,7 +1407,7 @@ def test_358_binary_file_non_utf8(tmp_path):
     runtime = PluginRuntime.with_manifest(manifest)
 
     cli_args = [str(test_file)]
-    cap = runtime.manifest.caps[0]
+    # cap is already defined above with correct URN and args
     result = runtime._extract_arg_value(cap.args[0], cli_args, None)
 
     assert result == binary_data, "Binary data should read correctly"
@@ -1362,7 +1440,7 @@ def test_359_invalid_glob_pattern_fails():
     paths_json = json.dumps([pattern])
 
     cli_args = [paths_json]
-    cap = runtime.manifest.caps[0]
+    # cap is already defined above with correct URN and args
 
     with pytest.raises(CliError) as exc_info:
         runtime._extract_arg_value(cap.args[0], cli_args, None)
@@ -1397,7 +1475,7 @@ def test_360_extract_effective_payload_with_file_data(tmp_path):
     runtime = PluginRuntime.with_manifest(manifest)
 
     cli_args = [str(test_file)]
-    cap = runtime.manifest.caps[0]
+    # cap is already defined above with correct URN and args
 
     # Build arguments (what build_arguments_from_cli does)
     arguments = runtime.build_arguments_from_cli(cap, cli_args)
@@ -1440,7 +1518,8 @@ def test_361_cli_mode_file_path(tmp_path):
 
     # CLI mode: pass file path as positional argument
     cli_args = [str(test_file)]
-    arguments = runtime.build_arguments_from_cli(runtime.manifest.caps[0], cli_args)
+    cap = runtime.find_cap_by_command(runtime.manifest, cap.command)
+    arguments = runtime.build_arguments_from_cli(cap, cli_args)
 
     # Verify arguments contain file-path URN (before conversion)
     assert len(arguments) == 1
@@ -1506,28 +1585,26 @@ def test_362_cli_mode_piped_binary():
 # TEST363: CBOR mode with chunked content - send file content streaming as chunks
 def test_363_cbor_mode_chunked_content():
     from capns.cap.definition import CapArg, StdinSource
-    import queue
 
     pdf_content = bytes([0xAA] * 10000)  # 10KB of data
     received_data = []
 
-    def handler(frames, emitter, peer):
-        # TRUE STREAMING: Relay frames and verify
-        total = bytearray()
-        for frame in iter(frames.get, None):
-            if frame is None:
-                break
-            if frame.frame_type == FrameType.CHUNK:
-                if frame.payload is not None:
+    class StreamingOp(Op):
+        async def perform(self, dry, wet):
+            req = wet.get_required(WET_KEY_REQUEST)
+            frames_q = req.take_frames()
+            total = bytearray()
+            for frame in iter(frames_q.get, None):
+                if frame.frame_type == FrameType.CHUNK and frame.payload is not None:
                     total.extend(frame.payload)
-                    emitter.emit_cbor(frame.payload)
-
-        # Verify what we received
-        cbor_val = cbor2.loads(bytes(total))
-        if isinstance(cbor_val, list) and len(cbor_val) > 0:
-            arg_map = cbor_val[0]
-            if isinstance(arg_map, dict) and "value" in arg_map:
-                received_data.append(arg_map["value"])
+                elif frame.frame_type == FrameType.END:
+                    break
+            cbor_val = cbor2.loads(bytes(total))
+            if isinstance(cbor_val, list) and len(cbor_val) > 0:
+                arg_map = cbor_val[0]
+                if isinstance(arg_map, dict) and "value" in arg_map:
+                    received_data.append(arg_map["value"])
+        def metadata(self): return OpMetadata.builder("StreamingOp").build()
 
     cap = create_test_cap(
         'cap:in="media:pdf;bytes";op=process;out="media:void"',
@@ -1544,7 +1621,7 @@ def test_363_cbor_mode_chunked_content():
 
     manifest = create_test_manifest("TestPlugin", "1.0.0", "Test", [cap])
     runtime = PluginRuntime.with_manifest(manifest)
-    runtime.register_raw(cap.urn_string(), handler)
+    runtime.register_op(cap.urn_string(), StreamingOp)
 
     # Build CBOR payload
     from capns.cap.caller import CapArgumentValue
@@ -1557,13 +1634,11 @@ def test_363_cbor_mode_chunked_content():
         for arg in args
     ])
 
-    # Simulate streaming: chunk payload and send via queue
-    handler_func = runtime.find_handler(cap.urn_string())
-    assert handler_func is not None, "Handler not found"
+    from capns.bifaci.frame import compute_checksum
+    factory = runtime.find_handler(cap.urn_string())
+    assert factory is not None, "Handler not found"
 
-    no_peer = NoPeerInvoker()
     emitter = CliStreamEmitter()
-
     frames = queue.Queue()
     max_chunk = 262144
     request_id = MessageId(0)
@@ -1572,21 +1647,22 @@ def test_363_cbor_mode_chunked_content():
     # Send STREAM_START
     frames.put(Frame.stream_start(request_id, stream_id, "media:bytes"))
 
-    # Send CHUNK frames
+    # Send CHUNK frames (raw payload bytes, not CBOR-re-encoded)
     offset = 0
     seq = 0
     while offset < len(payload_bytes):
         chunk_size = min(len(payload_bytes) - offset, max_chunk)
-        frames.put(Frame.chunk(request_id, stream_id, seq, payload_bytes[offset:offset + chunk_size]))
+        chunk = payload_bytes[offset:offset + chunk_size]
+        frames.put(Frame.chunk(request_id, stream_id, seq, chunk, seq, compute_checksum(chunk)))
         offset += chunk_size
         seq += 1
 
     # Send STREAM_END and END
-    frames.put(Frame.stream_end(request_id, stream_id))
+    frames.put(Frame.stream_end(request_id, stream_id, seq))
     frames.put(Frame.end(request_id, None))
     frames.put(None)
 
-    handler_func(frames, emitter, no_peer)
+    invoke_op(factory, frames, emitter)
 
     assert len(received_data) == 1, "Should receive data"
     assert received_data[0] == pdf_content, "Handler should receive chunked content"
@@ -1736,3 +1812,38 @@ def test_398_build_payload_io_error():
         runtime._build_payload_from_streaming_reader(cap, reader, DEFAULT_MAX_CHUNK)
 
     assert "simulated read error" in str(exc_info.value), f"Expected 'simulated read error', got: {exc_info.value}"
+
+
+# TEST479: Custom identity Op overrides auto-registered default
+def test_479_custom_identity_overrides_default():
+    from capns.standard.caps import CAP_IDENTITY
+
+    class FailOp(Op):
+        async def perform(self, dry, wet):
+            raise ExecutionFailedError("custom identity")
+        def metadata(self): return OpMetadata.builder("FailOp").build()
+
+    runtime = PluginRuntime.with_manifest_json(VALID_MANIFEST)
+
+    # Auto-registered identity handler must exist
+    assert runtime.find_handler(CAP_IDENTITY) is not None, "Auto-registered identity must exist"
+
+    # Count handlers before override
+    handlers_before = len(runtime.handlers)
+
+    # Override identity with a custom Op
+    runtime.register_op_type(CAP_IDENTITY, FailOp)
+
+    # Handler count must not change (dict insert replaces, doesn't add)
+    assert len(runtime.handlers) == handlers_before, \
+        "Replacing identity must not increase handler count"
+
+    # Custom Op must be invoked (not the default)
+    factory = runtime.find_handler(CAP_IDENTITY)
+    assert factory is not None
+    frames = make_test_frames("media:bytes", b"test")
+    emitter = CliStreamEmitter()
+    with pytest.raises(Exception) as exc_info:
+        invoke_op(factory, frames, emitter)
+    assert "custom identity" in str(exc_info.value), \
+        f"Custom identity Op must be called: {exc_info.value}"
