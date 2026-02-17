@@ -841,29 +841,42 @@ class PluginRuntime:
     def find_handler(self, cap_urn: str) -> Optional[HandlerFn]:
         """Find a handler for a cap URN.
         Returns the handler if found, None otherwise.
+
+        Matching direction: request.accepts(registered_cap) — the incoming request
+        (pattern) must accept the registered cap (instance). Mirrors Rust exactly:
+          `request_urn.accepts(&registered_urn)`
+
+        Selects the closest-specificity match to the request (not max-specificity),
+        to prevent identity handlers from stealing routes from specific handlers.
         """
         # First try exact match
         if cap_urn in self.handlers:
             return self.handlers[cap_urn]
 
         # Then try pattern matching via CapUrn
-        # Matching direction: request is pattern, registered cap is instance.
-        # `request.accepts(registered_cap)` — request must accept the registered cap
         try:
             request_urn = CapUrn.from_string(cap_urn)
         except Exception:
             return None
 
+        request_specificity = request_urn.specificity()
+        best_handler = None
+        best_distance = None
+
         for registered_cap_str, handler in self.handlers.items():
             try:
                 registered_urn = CapUrn.from_string(registered_cap_str)
-                # Routing direction: request.accepts(registered_cap)
+                # Routing direction: request.accepts(registered_cap) (mirrors Rust)
                 if request_urn.accepts(registered_urn):
-                    return handler
+                    specificity = registered_urn.specificity()
+                    distance = abs(specificity - request_specificity)
+                    if best_distance is None or distance < best_distance:
+                        best_handler = handler
+                        best_distance = distance
             except Exception:
                 continue
 
-        return None
+        return best_handler
 
     def run(self) -> None:
         """Run the plugin runtime.
