@@ -53,7 +53,7 @@ from abc import ABC, abstractmethod
 from dataclasses import dataclass
 import cbor2
 
-from capns.bifaci.frame import Frame, FrameType, Limits, MessageId, DEFAULT_MAX_FRAME, DEFAULT_MAX_CHUNK, compute_checksum
+from capns.bifaci.frame import Frame, FrameType, Limits, MessageId, DEFAULT_MAX_FRAME, DEFAULT_MAX_CHUNK, compute_checksum, SeqAssigner, FlowKey
 from capns.bifaci.io import handshake_accept, FrameReader, FrameWriter, CborError, ProtocolError
 from capns.cap.caller import CapArgumentValue
 from capns.cap.definition import ArgSource, Cap, CapArg, CliFlagSource
@@ -132,6 +132,35 @@ class ManifestError(RuntimeError):
     pass
 
 
+class SyncFrameWriter:
+    """Thread-safe frame writer with centralized SeqAssigner.
+
+    All frames pass through the SeqAssigner before writing, ensuring
+    monotonically increasing seq per flow (RID + optional XID).
+    This matches the Rust plugin_runtime writer thread with SeqAssigner
+    and Go's syncFrameWriter.
+    """
+
+    def __init__(self, writer: FrameWriter):
+        self._writer = writer
+        self._lock = threading.Lock()
+        self._seq_assigner = SeqAssigner()
+
+    def write(self, frame: Frame) -> None:
+        """Write a frame with centralized seq assignment (thread-safe)."""
+        with self._lock:
+            self._seq_assigner.assign(frame)
+            self._writer.write(frame)
+            # Clean up flow tracking after terminal frames
+            if frame.frame_type in (FrameType.END, FrameType.ERR):
+                key = FlowKey.from_frame(frame)
+                self._seq_assigner.remove(key)
+
+    def set_limits(self, limits: Limits) -> None:
+        with self._lock:
+            self._writer.set_limits(limits)
+
+
 class StreamEmitter(Protocol):
     """A streaming emitter that writes chunks immediately to the output.
     Thread-safe for use in concurrent handlers.
@@ -205,6 +234,7 @@ class PendingIncomingRequest:
     content_type: Optional[str]
     streams: List  # List of (stream_id, PendingStream) tuples — ordered
     ended: bool  # True after END frame — any stream activity after is FATAL
+    routing_id: Optional["MessageId"] = None  # XID from incoming REQ (preserved for response routing)
 
 
 class PeerInvokerImpl:
@@ -214,9 +244,8 @@ class PeerInvokerImpl:
     on the host while processing a request.
     """
 
-    def __init__(self, writer: FrameWriter, writer_lock: threading.Lock, pending_requests: Dict[str, PendingPeerRequest], max_chunk: Optional[int] = None):
+    def __init__(self, writer: SyncFrameWriter, pending_requests: Dict[str, PendingPeerRequest], max_chunk: Optional[int] = None):
         self.writer = writer
-        self.writer_lock = writer_lock
         self.pending_requests = pending_requests
         self.pending_lock = threading.Lock()
         self.max_chunk = max_chunk if max_chunk is not None else DEFAULT_MAX_CHUNK
@@ -227,6 +256,7 @@ class PeerInvokerImpl:
         Protocol v2: Sends REQ(empty) + STREAM_START + CHUNK(s) + STREAM_END + END
         for each argument as an independent stream.
         Returns a queue that receives bare Frame objects from the host.
+        Seq is assigned centrally by SyncFrameWriter's SeqAssigner.
         """
         import uuid as _uuid
 
@@ -241,40 +271,37 @@ class PeerInvokerImpl:
         max_chunk = self.max_chunk
 
         try:
-            with self.writer_lock:
-                # 1. REQ with empty payload
-                req_frame = Frame.req(request_id, cap_urn, b"", "application/cbor")
-                self.writer.write(req_frame)
+            # 1. REQ with empty payload
+            self.writer.write(Frame.req(request_id, cap_urn, b"", "application/cbor"))
 
-                # 2. Each argument as an independent stream
-                for arg in arguments:
-                    stream_id = str(_uuid.uuid4())
+            # 2. Each argument as an independent stream
+            for arg in arguments:
+                stream_id = str(_uuid.uuid4())
 
-                    # STREAM_START
-                    self.writer.write(Frame.stream_start(request_id, stream_id, arg.media_urn))
+                # STREAM_START (seq assigned by SyncFrameWriter)
+                self.writer.write(Frame.stream_start(request_id, stream_id, arg.media_urn))
 
-                    # CHUNK(s): Send argument data as CBOR-encoded chunks
-                    # Each CHUNK payload MUST be independently decodable CBOR
-                    offset = 0
-                    seq = 0
-                    chunk_index = 0
-                    while offset < len(arg.value):
-                        chunk_size = min(len(arg.value) - offset, max_chunk)
-                        chunk_bytes = arg.value[offset:offset + chunk_size]
+                # CHUNK(s): Send argument data as CBOR-encoded chunks
+                # Each CHUNK payload MUST be independently decodable CBOR
+                # Seq is assigned by SyncFrameWriter — pass 0 as placeholder
+                offset = 0
+                chunk_index = 0
+                while offset < len(arg.value):
+                    chunk_size = min(len(arg.value) - offset, max_chunk)
+                    chunk_bytes = arg.value[offset:offset + chunk_size]
 
-                        # CBOR-encode chunk as bytes - independently decodable
-                        cbor_payload = cbor2.dumps(chunk_bytes)
+                    # CBOR-encode chunk as bytes - independently decodable
+                    cbor_payload = cbor2.dumps(chunk_bytes)
 
-                        self.writer.write(Frame.chunk(request_id, stream_id, seq, cbor_payload, chunk_index, compute_checksum(cbor_payload)))
-                        offset += chunk_size
-                        seq += 1
-                        chunk_index += 1
+                    self.writer.write(Frame.chunk(request_id, stream_id, 0, cbor_payload, chunk_index, compute_checksum(cbor_payload)))
+                    offset += chunk_size
+                    chunk_index += 1
 
-                    # STREAM_END
-                    self.writer.write(Frame.stream_end(request_id, stream_id, chunk_index))
+                # STREAM_END (seq assigned by SyncFrameWriter)
+                self.writer.write(Frame.stream_end(request_id, stream_id, chunk_index))
 
-                # 3. END
-                self.writer.write(Frame.end(request_id, None))
+            # 3. END (seq assigned by SyncFrameWriter)
+            self.writer.write(Frame.end(request_id, None))
 
         except Exception as e:
             with self.pending_lock:
@@ -343,30 +370,31 @@ class ThreadSafeEmitter:
     with stream_id. Caller MUST call finalize() after handler returns to send
     STREAM_END + END.
 
-    All methods raise exceptions on error - no silent failures.
+    Seq is assigned centrally by the SyncFrameWriter's SeqAssigner — this emitter
+    does NOT track seq itself. This matches the Rust plugin_runtime writer thread
+    with SeqAssigner and Go's threadSafeEmitter with syncFrameWriter.
     """
 
-    def __init__(self, writer: FrameWriter, request_id: MessageId, stream_id: str, media_urn: str, writer_lock: Optional[threading.Lock] = None, max_chunk: Optional[int] = None):
+    def __init__(self, writer: SyncFrameWriter, request_id: MessageId, stream_id: str, media_urn: str, routing_id: Optional[MessageId] = None, max_chunk: Optional[int] = None):
         self.writer = writer
         self.request_id = request_id
         self.stream_id = stream_id
         self.media_urn = media_urn
-        self.seq = 0
+        self.routing_id = routing_id  # XID from incoming REQ — set on all response frames
         self.chunk_index = 0
-        self.seq_lock = threading.Lock()
-        self.writer_lock = writer_lock if writer_lock is not None else threading.Lock()
+        self.chunk_lock = threading.Lock()
         self.max_chunk = max_chunk if max_chunk is not None else DEFAULT_MAX_CHUNK
         self.stream_started = False
         self.stream_lock = threading.Lock()
 
     def _ensure_stream_started(self) -> None:
-        """Send STREAM_START if not yet sent. Must be called with seq_lock held."""
+        """Send STREAM_START if not yet sent. Seq and routing_id assigned here."""
         with self.stream_lock:
             if not self.stream_started:
                 self.stream_started = True
                 start_frame = Frame.stream_start(self.request_id, self.stream_id, self.media_urn)
-                with self.writer_lock:
-                    self.writer.write(start_frame)
+                start_frame.routing_id = self.routing_id  # Propagate XID from incoming REQ
+                self.writer.write(start_frame)
 
     def emit_cbor(self, value: Any) -> None:
         """Emit a CBOR value as output.
@@ -380,6 +408,7 @@ class ThreadSafeEmitter:
         For other types: encode once (typically small)
 
         Each CHUNK payload can be decoded independently: cbor2.loads(chunk.payload)
+        Seq is assigned by SyncFrameWriter — pass 0 as placeholder.
         Raises: RuntimeError on write failure."""
         self._ensure_stream_started()
 
@@ -394,21 +423,19 @@ class ThreadSafeEmitter:
                 # Encode as complete bytes - independently decodable
                 cbor_payload = cbor2.dumps(chunk_bytes)
 
-                with self.seq_lock:
-                    seq = self.seq
-                    self.seq += 1
+                with self.chunk_lock:
                     idx = self.chunk_index
                     self.chunk_index += 1
 
-                frame = Frame.chunk(self.request_id, self.stream_id, seq, cbor_payload, idx, compute_checksum(cbor_payload))
-                with self.writer_lock:
-                    self.writer.write(frame)
+                # Seq=0 placeholder — SyncFrameWriter assigns the real seq
+                frame = Frame.chunk(self.request_id, self.stream_id, 0, cbor_payload, idx, compute_checksum(cbor_payload))
+                frame.routing_id = self.routing_id  # Propagate XID from incoming REQ
+                self.writer.write(frame)
 
                 offset += chunk_size
 
         elif isinstance(value, str):
             # Split string BEFORE encoding, encode each chunk as str
-            # Encode to bytes to measure size, but keep as str for CBOR
             str_bytes = value.encode('utf-8')
             offset = 0
             while offset < len(str_bytes):
@@ -426,97 +453,84 @@ class ThreadSafeEmitter:
                 # Encode as complete str - independently decodable
                 cbor_payload = cbor2.dumps(chunk_str)
 
-                with self.seq_lock:
-                    seq = self.seq
-                    self.seq += 1
+                with self.chunk_lock:
                     idx = self.chunk_index
                     self.chunk_index += 1
 
-                frame = Frame.chunk(self.request_id, self.stream_id, seq, cbor_payload, idx, compute_checksum(cbor_payload))
-                with self.writer_lock:
-                    self.writer.write(frame)
+                # Seq=0 placeholder — SyncFrameWriter assigns the real seq
+                frame = Frame.chunk(self.request_id, self.stream_id, 0, cbor_payload, idx, compute_checksum(cbor_payload))
+                frame.routing_id = self.routing_id  # Propagate XID from incoming REQ
+                self.writer.write(frame)
 
                 offset += len(chunk_str.encode('utf-8'))
 
         elif isinstance(value, list):
             # Array: send each element as independent CBOR chunk
-            # Allows receiver to reconstruct elements without waiting for entire array
             for element in value:
-                # Encode each element as complete CBOR value
                 cbor_payload = cbor2.dumps(element)
 
-                with self.seq_lock:
-                    seq = self.seq
-                    self.seq += 1
+                with self.chunk_lock:
                     idx = self.chunk_index
                     self.chunk_index += 1
 
-                frame = Frame.chunk(self.request_id, self.stream_id, seq, cbor_payload, idx, compute_checksum(cbor_payload))
-                with self.writer_lock:
-                    self.writer.write(frame)
+                frame = Frame.chunk(self.request_id, self.stream_id, 0, cbor_payload, idx, compute_checksum(cbor_payload))
+                self.writer.write(frame)
 
         elif isinstance(value, dict):
-            # Map: send each entry as independent CBOR chunk
-            # Receiver must wait for all entries before reconstructing map
+            # Map: send each entry as [key, value] pair chunk
             for key, val in value.items():
-                # Encode each key-value pair as a 2-element list: [key, value]
                 entry = [key, val]
                 cbor_payload = cbor2.dumps(entry)
 
-                with self.seq_lock:
-                    seq = self.seq
-                    self.seq += 1
+                with self.chunk_lock:
                     idx = self.chunk_index
                     self.chunk_index += 1
 
-                frame = Frame.chunk(self.request_id, self.stream_id, seq, cbor_payload, idx, compute_checksum(cbor_payload))
-                with self.writer_lock:
-                    self.writer.write(frame)
+                frame = Frame.chunk(self.request_id, self.stream_id, 0, cbor_payload, idx, compute_checksum(cbor_payload))
+                self.writer.write(frame)
 
         else:
             # For other types (int, float, bool, None): encode as single chunk
-            # These have single-value semantics and are typically small
             cbor_payload = cbor2.dumps(value)
 
-            with self.seq_lock:
-                seq = self.seq
-                self.seq += 1
+            with self.chunk_lock:
                 idx = self.chunk_index
                 self.chunk_index += 1
 
-            frame = Frame.chunk(self.request_id, self.stream_id, seq, cbor_payload, idx, compute_checksum(cbor_payload))
-            with self.writer_lock:
-                self.writer.write(frame)
+            frame = Frame.chunk(self.request_id, self.stream_id, 0, cbor_payload, idx, compute_checksum(cbor_payload))
+            self.writer.write(frame)
 
     def finalize(self) -> None:
         """Send STREAM_END + END to complete the response.
         Must be called exactly once after the handler returns.
         If handler never emitted, sends STREAM_START first for protocol consistency.
+        Seq assigned by SyncFrameWriter for all frames.
         """
         # Ensure STREAM_START was sent (even if handler emitted nothing)
         with self.stream_lock:
             if not self.stream_started:
                 self.stream_started = True
                 start_frame = Frame.stream_start(self.request_id, self.stream_id, self.media_urn)
-                with self.writer_lock:
-                    self.writer.write(start_frame)
+                start_frame.routing_id = self.routing_id  # Propagate XID from incoming REQ
+                self.writer.write(start_frame)
 
-        # STREAM_END
+        # STREAM_END (seq assigned by SyncFrameWriter)
         stream_end = Frame.stream_end(self.request_id, self.stream_id, self.chunk_index)
-        with self.writer_lock:
-            self.writer.write(stream_end)
+        stream_end.routing_id = self.routing_id  # Propagate XID from incoming REQ
+        self.writer.write(stream_end)
 
-        # END
+        # END (seq assigned by SyncFrameWriter)
         end_frame = Frame.end(self.request_id, None)
-        with self.writer_lock:
-            self.writer.write(end_frame)
+        end_frame.routing_id = self.routing_id  # Propagate XID from incoming REQ
+        self.writer.write(end_frame)
 
     def emit_log(self, level: str, message: str) -> None:
         """Emit a log message at the given level.
-        Sends a LOG frame (side-channel, does not affect response stream)."""
+        Sends a LOG frame (side-channel, does not affect response stream).
+        Seq assigned by SyncFrameWriter."""
         frame = Frame.log(self.request_id, level, message)
-        with self.writer_lock:
-            self.writer.write(frame)
+        frame.routing_id = self.routing_id  # Propagate XID from incoming REQ
+        self.writer.write(frame)
 
 
 # Handler function type - receives bare CBOR Frame objects
@@ -971,20 +985,22 @@ class PluginRuntime:
         """Run in Plugin CBOR mode - binary frame protocol via stdin/stdout."""
         # Lock stdin for reading (single reader)
         reader = FrameReader(sys.stdin.buffer)
-        # Use stdout directly, protected by lock for thread safety
-        writer = FrameWriter(sys.stdout.buffer)
-        writer_lock = threading.Lock()
+        # SyncFrameWriter: thread-safe writer with centralized SeqAssigner.
+        # All frames written through this get monotonically increasing seq per flow.
+        # Matches Rust plugin_runtime writer thread + SeqAssigner.
+        raw_writer = FrameWriter(sys.stdout.buffer)
+        sync_writer = SyncFrameWriter(raw_writer)
 
         # Perform handshake - send our manifest in the HELLO response
-        with writer_lock:
-            try:
-                limits = handshake_accept(reader, writer, self.manifest_data)
-                reader.set_limits(limits)
-                writer.set_limits(limits)
-                self.limits = limits
-            except Exception as e:
-                print(f"[PluginRuntime] Handshake failed: {e}", file=sys.stderr)
-                raise
+        # Handshake uses raw_writer directly (HELLO is non-flow, seq doesn't matter)
+        try:
+            limits = handshake_accept(reader, raw_writer, self.manifest_data)
+            reader.set_limits(limits)
+            sync_writer.set_limits(limits)
+            self.limits = limits
+        except Exception as e:
+            print(f"[PluginRuntime] Handshake failed: {e}", file=sys.stderr)
+            raise
 
         # Track pending peer requests (plugin invoking host caps)
         pending_peer_requests: Dict[str, PendingPeerRequest] = {}
@@ -1020,11 +1036,10 @@ class PluginRuntime:
                         "INVALID_REQUEST",
                         "Request missing cap URN"
                     )
-                    with writer_lock:
-                        try:
-                            writer.write(err_frame)
-                        except Exception:
-                            pass
+                    try:
+                        sync_writer.write(err_frame)
+                    except Exception:
+                        pass
                     continue
 
                 raw_payload = frame.payload if frame.payload is not None else b""
@@ -1036,51 +1051,49 @@ class PluginRuntime:
                         "PROTOCOL_ERROR",
                         "REQ frame must have empty payload — use STREAM_START for arguments"
                     )
-                    with writer_lock:
-                        try:
-                            writer.write(err_frame)
-                        except Exception:
-                            pass
+                    try:
+                        sync_writer.write(err_frame)
+                    except Exception:
+                        pass
                     continue
 
                 # Start tracking this request — streams will be added via STREAM_START
+                # Capture routing_id (XID) from the REQ frame — must be propagated to all response frames
                 with pending_incoming_lock:
                     pending_incoming[frame.id.to_string()] = PendingIncomingRequest(
                         cap_urn=cap_urn,
                         content_type=frame.content_type,
                         streams=[],
-                        ended=False
+                        ended=False,
+                        routing_id=frame.routing_id,  # XID for response routing
                     )
                 continue  # Wait for STREAM_START/CHUNK/STREAM_END/END frames
 
             elif frame.frame_type == FrameType.HEARTBEAT:
                 # Respond to heartbeat immediately - never blocked by handlers
                 response = Frame.heartbeat(frame.id)
-                with writer_lock:
-                    try:
-                        writer.write(response)
-                    except Exception as e:
-                        print(f"[PluginRuntime] Failed to write heartbeat response: {e}", file=sys.stderr)
-                        break
+                try:
+                    sync_writer.write(response)
+                except Exception as e:
+                    print(f"[PluginRuntime] Failed to write heartbeat response: {e}", file=sys.stderr)
+                    break
 
             elif frame.frame_type == FrameType.HELLO:
                 # Unexpected HELLO after handshake - protocol error
                 err_frame = Frame.err(frame.id, "PROTOCOL_ERROR", "Unexpected HELLO after handshake")
-                with writer_lock:
-                    try:
-                        writer.write(err_frame)
-                    except Exception:
-                        pass
+                try:
+                    sync_writer.write(err_frame)
+                except Exception:
+                    pass
 
             elif frame.frame_type == FrameType.CHUNK:
                 # Protocol v2: CHUNK must have stream_id
                 if frame.stream_id is None:
                     err_frame = Frame.err(frame.id, "PROTOCOL_ERROR", "CHUNK frame missing stream_id")
-                    with writer_lock:
-                        try:
-                            writer.write(err_frame)
-                        except Exception:
-                            pass
+                    try:
+                        sync_writer.write(err_frame)
+                    except Exception:
+                        pass
                     continue
 
                 stream_id = frame.stream_id
@@ -1095,11 +1108,10 @@ class PluginRuntime:
                         if pending_req.ended:
                             del pending_incoming[frame_id_str]
                             err_frame = Frame.err(frame.id, "PROTOCOL_ERROR", "CHUNK after request END")
-                            with writer_lock:
-                                try:
-                                    writer.write(err_frame)
-                                except Exception:
-                                    pass
+                            try:
+                                sync_writer.write(err_frame)
+                            except Exception:
+                                pass
                             continue
 
                         # FAIL HARD: Unknown stream
@@ -1112,22 +1124,20 @@ class PluginRuntime:
                         if found_stream is None:
                             del pending_incoming[frame_id_str]
                             err_frame = Frame.err(frame.id, "PROTOCOL_ERROR", f"CHUNK for unknown stream_id: {stream_id}")
-                            with writer_lock:
-                                try:
-                                    writer.write(err_frame)
-                                except Exception:
-                                    pass
+                            try:
+                                sync_writer.write(err_frame)
+                            except Exception:
+                                pass
                             continue
 
                         # FAIL HARD: Stream already ended
                         if found_stream.complete:
                             del pending_incoming[frame_id_str]
                             err_frame = Frame.err(frame.id, "PROTOCOL_ERROR", f"CHUNK for ended stream: {stream_id}")
-                            with writer_lock:
-                                try:
-                                    writer.write(err_frame)
-                                except Exception:
-                                    pass
+                            try:
+                                sync_writer.write(err_frame)
+                            except Exception:
+                                pass
                             continue
 
                         # Valid chunk for active stream
@@ -1158,11 +1168,11 @@ class PluginRuntime:
                     handler = self.find_handler(pending_req.cap_urn)
                     if not handler:
                         err_frame = Frame.err(frame.id, "NO_HANDLER", f"No handler registered for cap: {pending_req.cap_urn}")
-                        with writer_lock:
-                            try:
-                                writer.write(err_frame)
-                            except Exception:
-                                pass
+                        err_frame.routing_id = pending_req.routing_id  # Propagate XID
+                        try:
+                            sync_writer.write(err_frame)
+                        except Exception:
+                            pass
                         continue
 
                     # Bind values for handler thread (default args capture by value,
@@ -1173,6 +1183,7 @@ class PluginRuntime:
                     _cap_urn = pending_req.cap_urn
                     _handler = handler
                     _max_chunk = self.limits.max_chunk
+                    _routing_id = pending_req.routing_id  # XID from incoming REQ
 
                     def handle_streamed_request(
                         request_id=_request_id,
@@ -1180,11 +1191,14 @@ class PluginRuntime:
                         cap_urn_clone=_cap_urn,
                         handler=_handler,
                         max_chunk=_max_chunk,
+                        routing_id=_routing_id,
                     ):
                         import uuid as _uuid
                         response_stream_id = f"resp-{_uuid.uuid4().hex[:8]}"
-                        emitter = ThreadSafeEmitter(writer, request_id, response_stream_id, "media:bytes", writer_lock, max_chunk)
-                        peer_invoker = PeerInvokerImpl(writer, writer_lock, pending_peer_requests, max_chunk)
+                        # SyncFrameWriter assigns seq centrally for all frames
+                        # routing_id (XID) is propagated from incoming REQ to all response frames
+                        emitter = ThreadSafeEmitter(sync_writer, request_id, response_stream_id, "media:bytes", routing_id, max_chunk)
+                        peer_invoker = PeerInvokerImpl(sync_writer, pending_peer_requests, max_chunk)
 
                         # Create queue and populate with request frames
                         frames = queue.Queue()
@@ -1206,27 +1220,27 @@ class PluginRuntime:
                             frames.put(None)  # Signal end of stream
                         except Exception as e:
                             err_frame = Frame.err(request_id, "PAYLOAD_ERROR", str(e))
-                            with writer_lock:
-                                try:
-                                    writer.write(err_frame)
-                                except Exception as write_err:
-                                    print(f"[PluginRuntime] Failed to write error response: {write_err}", file=sys.stderr)
+                            err_frame.routing_id = routing_id  # Propagate XID
+                            try:
+                                sync_writer.write(err_frame)
+                            except Exception as write_err:
+                                print(f"[PluginRuntime] Failed to write error response: {write_err}", file=sys.stderr)
                             return
 
                         # Execute handler — receives bare Frame objects
                         try:
                             handler(frames, emitter, peer_invoker)
 
-                            # Finalize: STREAM_END + END
+                            # Finalize: STREAM_END + END (seq assigned by SyncFrameWriter)
                             emitter.finalize()
 
                         except Exception as e:
                             err_frame = Frame.err(request_id, "HANDLER_ERROR", str(e))
-                            with writer_lock:
-                                try:
-                                    writer.write(err_frame)
-                                except Exception as write_err:
-                                    print(f"[PluginRuntime] Failed to write error response: {write_err}", file=sys.stderr)
+                            err_frame.routing_id = routing_id  # Propagate XID
+                            try:
+                                sync_writer.write(err_frame)
+                            except Exception as write_err:
+                                print(f"[PluginRuntime] Failed to write error response: {write_err}", file=sys.stderr)
 
                     thread = threading.Thread(target=handle_streamed_request, daemon=True)
                     thread.start()
@@ -1248,20 +1262,18 @@ class PluginRuntime:
                 # Protocol v2: A new stream is starting for a request
                 if frame.stream_id is None:
                     err_frame = Frame.err(frame.id, "PROTOCOL_ERROR", "STREAM_START missing stream_id")
-                    with writer_lock:
-                        try:
-                            writer.write(err_frame)
-                        except Exception:
-                            pass
+                    try:
+                        sync_writer.write(err_frame)
+                    except Exception:
+                        pass
                     continue
 
                 if frame.media_urn is None:
                     err_frame = Frame.err(frame.id, "PROTOCOL_ERROR", "STREAM_START missing media_urn")
-                    with writer_lock:
-                        try:
-                            writer.write(err_frame)
-                        except Exception:
-                            pass
+                    try:
+                        sync_writer.write(err_frame)
+                    except Exception:
+                        pass
                     continue
 
                 stream_id = frame.stream_id
@@ -1277,11 +1289,10 @@ class PluginRuntime:
                         if pending_req.ended:
                             del pending_incoming[frame_id_str]
                             err_frame = Frame.err(frame.id, "PROTOCOL_ERROR", "STREAM_START after request END")
-                            with writer_lock:
-                                try:
-                                    writer.write(err_frame)
-                                except Exception:
-                                    pass
+                            try:
+                                sync_writer.write(err_frame)
+                            except Exception:
+                                pass
                             continue
 
                         # FAIL HARD: Duplicate stream_id
@@ -1289,11 +1300,10 @@ class PluginRuntime:
                             if sid == stream_id:
                                 del pending_incoming[frame_id_str]
                                 err_frame = Frame.err(frame.id, "PROTOCOL_ERROR", f"Duplicate stream_id: {stream_id}")
-                                with writer_lock:
-                                    try:
-                                        writer.write(err_frame)
-                                    except Exception:
-                                        pass
+                                try:
+                                    sync_writer.write(err_frame)
+                                except Exception:
+                                    pass
                                 break
                         else:
                             # No duplicate — add new stream
@@ -1315,11 +1325,10 @@ class PluginRuntime:
                 # Protocol v2: A stream has ended for a request
                 if frame.stream_id is None:
                     err_frame = Frame.err(frame.id, "PROTOCOL_ERROR", "STREAM_END missing stream_id")
-                    with writer_lock:
-                        try:
-                            writer.write(err_frame)
-                        except Exception:
-                            pass
+                    try:
+                        sync_writer.write(err_frame)
+                    except Exception:
+                        pass
                     continue
 
                 stream_id = frame.stream_id
@@ -1341,11 +1350,10 @@ class PluginRuntime:
                         if not found:
                             del pending_incoming[frame_id_str]
                             err_frame = Frame.err(frame.id, "PROTOCOL_ERROR", f"STREAM_END for unknown stream_id: {stream_id}")
-                            with writer_lock:
-                                try:
-                                    writer.write(err_frame)
-                                except Exception:
-                                    pass
+                            try:
+                                sync_writer.write(err_frame)
+                            except Exception:
+                                pass
                         continue
 
                 # Not an incoming request - must be a peer response stream end

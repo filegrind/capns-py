@@ -147,6 +147,13 @@ class MessageId:
         """Check if this is a UUID variant"""
         return self.uuid_bytes is not None
 
+    def to_cbor(self):
+        """Convert to CBOR-encodable value (bytes for UUID, int for Uint)."""
+        if self.uuid_bytes is not None:
+            return self.uuid_bytes
+        else:
+            return self.uint_value
+
     def is_uint(self) -> bool:
         """Check if this is a Uint variant"""
         return self.uint_value is not None
@@ -479,6 +486,18 @@ class Frame:
         """Check if this is the final frame in a stream"""
         return self.eof is True
 
+    def is_flow_frame(self) -> bool:
+        """Return True if this frame type participates in flow ordering (seq tracking).
+        Non-flow frames (Hello, Heartbeat, RelayNotify, RelayState) bypass seq assignment.
+        (matches Rust Frame::is_flow_frame and Go Frame.IsFlowFrame)
+        """
+        return self.frame_type not in (
+            FrameType.HELLO,
+            FrameType.HEARTBEAT,
+            FrameType.RELAY_NOTIFY,
+            FrameType.RELAY_STATE,
+        )
+
     def error_code(self) -> Optional[str]:
         """Get error code if this is an ERR frame"""
         if self.frame_type != FrameType.ERR:
@@ -578,3 +597,68 @@ class Keys:
     INDEX = 14
     CHUNK_COUNT = 15
     CHECKSUM = 16
+
+
+# =============================================================================
+# FLOW KEY — Composite key for frame ordering (RID + optional XID)
+# =============================================================================
+
+class FlowKey:
+    """Composite key identifying a frame flow for seq ordering.
+    Absence of XID (routing_id) is a valid separate flow from presence of XID.
+    (matches Rust FlowKey and Go FlowKey)
+    """
+    __slots__ = ("_rid", "_xid")
+
+    def __init__(self, rid: str, xid: str):
+        self._rid = rid
+        self._xid = xid
+
+    @classmethod
+    def from_frame(cls, frame: "Frame") -> "FlowKey":
+        """Extract a FlowKey from a frame."""
+        rid = frame.id.to_string()
+        xid = frame.routing_id.to_string() if frame.routing_id is not None else ""
+        return cls(rid, xid)
+
+    def __eq__(self, other: object) -> bool:
+        if not isinstance(other, FlowKey):
+            return NotImplemented
+        return self._rid == other._rid and self._xid == other._xid
+
+    def __hash__(self) -> int:
+        return hash((self._rid, self._xid))
+
+    def __repr__(self) -> str:
+        return f"FlowKey(rid={self._rid!r}, xid={self._xid!r})"
+
+
+# =============================================================================
+# SEQ ASSIGNER — Centralized seq assignment at output stages
+# =============================================================================
+
+class SeqAssigner:
+    """Assigns monotonically increasing seq numbers per FlowKey (RID + optional XID).
+    Used at output stages (writer threads) to ensure each flow's frames
+    carry a contiguous, gap-free seq sequence starting at 0.
+    Non-flow frames (Hello, Heartbeat, RelayNotify, RelayState) are skipped.
+    (matches Rust SeqAssigner and Go SeqAssigner)
+    """
+
+    def __init__(self):
+        self._counters: dict = {}
+
+    def assign(self, frame: "Frame") -> None:
+        """Assign the next seq number to a frame.
+        Non-flow frames are left unchanged (seq stays 0).
+        """
+        if not frame.is_flow_frame():
+            return
+        key = FlowKey.from_frame(frame)
+        counter = self._counters.get(key, 0)
+        frame.seq = counter
+        self._counters[key] = counter + 1
+
+    def remove(self, key: FlowKey) -> None:
+        """Remove tracking for a flow (call after END/ERR delivery)."""
+        self._counters.pop(key, None)
