@@ -35,6 +35,7 @@ from capns.bifaci.frame import (
     Keys,
     DEFAULT_MAX_FRAME,
     DEFAULT_MAX_CHUNK,
+    DEFAULT_MAX_REORDER_BUFFER,
     PROTOCOL_VERSION,
     compute_checksum,
 )
@@ -509,7 +510,7 @@ def handshake(
         HandshakeError: If handshake fails
     """
     # Send our HELLO
-    our_hello = Frame.hello(DEFAULT_MAX_FRAME, DEFAULT_MAX_CHUNK)
+    our_hello = Frame.hello(DEFAULT_MAX_FRAME, DEFAULT_MAX_CHUNK, DEFAULT_MAX_REORDER_BUFFER)
     writer.write(our_hello)
 
     # Read their HELLO (should include manifest)
@@ -528,10 +529,12 @@ def handshake(
     # Negotiate minimum of both
     their_max_frame = their_frame.hello_max_frame() or DEFAULT_MAX_FRAME
     their_max_chunk = their_frame.hello_max_chunk() or DEFAULT_MAX_CHUNK
+    their_max_reorder_buffer = their_frame.hello_max_reorder_buffer() or DEFAULT_MAX_REORDER_BUFFER
 
     limits = Limits(
         max_frame=min(DEFAULT_MAX_FRAME, their_max_frame),
         max_chunk=min(DEFAULT_MAX_CHUNK, their_max_chunk),
+        max_reorder_buffer=min(DEFAULT_MAX_REORDER_BUFFER, their_max_reorder_buffer),
     )
 
     # Update both reader and writer with negotiated limits
@@ -573,14 +576,16 @@ def handshake_accept(
     # Negotiate minimum of both
     their_max_frame = their_frame.hello_max_frame() or DEFAULT_MAX_FRAME
     their_max_chunk = their_frame.hello_max_chunk() or DEFAULT_MAX_CHUNK
+    their_max_reorder_buffer = their_frame.hello_max_reorder_buffer() or DEFAULT_MAX_REORDER_BUFFER
 
     limits = Limits(
         max_frame=min(DEFAULT_MAX_FRAME, their_max_frame),
         max_chunk=min(DEFAULT_MAX_CHUNK, their_max_chunk),
+        max_reorder_buffer=min(DEFAULT_MAX_REORDER_BUFFER, their_max_reorder_buffer),
     )
 
     # Send our HELLO with manifest
-    our_hello = Frame.hello_with_manifest(limits.max_frame, limits.max_chunk, manifest)
+    our_hello = Frame.hello_with_manifest(limits.max_frame, limits.max_chunk, manifest, limits.max_reorder_buffer)
     writer.write(our_hello)
 
     # Update both reader and writer with negotiated limits
@@ -711,7 +716,7 @@ async def handshake_async(
         HandshakeError: If handshake fails
     """
     # Send our HELLO
-    our_hello = Frame.hello(DEFAULT_MAX_FRAME, DEFAULT_MAX_CHUNK)
+    our_hello = Frame.hello(DEFAULT_MAX_FRAME, DEFAULT_MAX_CHUNK, DEFAULT_MAX_REORDER_BUFFER)
     await writer.write(our_hello)
 
     # Read their HELLO (should include manifest)
@@ -730,10 +735,12 @@ async def handshake_async(
     # Negotiate minimum of both
     their_max_frame = their_frame.hello_max_frame() or DEFAULT_MAX_FRAME
     their_max_chunk = their_frame.hello_max_chunk() or DEFAULT_MAX_CHUNK
+    their_max_reorder_buffer = their_frame.hello_max_reorder_buffer() or DEFAULT_MAX_REORDER_BUFFER
 
     limits = Limits(
         max_frame=min(DEFAULT_MAX_FRAME, their_max_frame),
         max_chunk=min(DEFAULT_MAX_CHUNK, their_max_chunk),
+        max_reorder_buffer=min(DEFAULT_MAX_REORDER_BUFFER, their_max_reorder_buffer),
     )
 
     # Update both reader and writer with negotiated limits

@@ -190,11 +190,14 @@ class MessageId:
         return cls.new_uuid()
 
 
+DEFAULT_MAX_REORDER_BUFFER = 64
+
 @dataclass
 class Limits:
     """Negotiated protocol limits"""
     max_frame: int  # Maximum frame size in bytes
     max_chunk: int  # Maximum chunk payload size in bytes
+    max_reorder_buffer: int = DEFAULT_MAX_REORDER_BUFFER  # Maximum reorder buffer slots
 
     @classmethod
     def default(cls) -> "Limits":
@@ -202,6 +205,7 @@ class Limits:
         return cls(
             max_frame=DEFAULT_MAX_FRAME,
             max_chunk=DEFAULT_MAX_CHUNK,
+            max_reorder_buffer=DEFAULT_MAX_REORDER_BUFFER,
         )
 
 
@@ -288,11 +292,12 @@ class Frame:
         return cls(frame_type=frame_type, id=id)
 
     @classmethod
-    def hello(cls, max_frame: int, max_chunk: int) -> "Frame":
+    def hello(cls, max_frame: int, max_chunk: int, max_reorder_buffer: int = DEFAULT_MAX_REORDER_BUFFER) -> "Frame":
         """Create a HELLO frame for handshake (host side - no manifest)"""
         meta = {
             "max_frame": max_frame,
             "max_chunk": max_chunk,
+            "max_reorder_buffer": max_reorder_buffer,
             "version": PROTOCOL_VERSION,
         }
         frame = cls.new(FrameType.HELLO, MessageId(0))
@@ -300,7 +305,7 @@ class Frame:
         return frame
 
     @classmethod
-    def hello_with_manifest(cls, max_frame: int, max_chunk: int, manifest: bytes) -> "Frame":
+    def hello_with_manifest(cls, max_frame: int, max_chunk: int, manifest: bytes, max_reorder_buffer: int = DEFAULT_MAX_REORDER_BUFFER) -> "Frame":
         """Create a HELLO frame for handshake with manifest (plugin side)
 
         The manifest is JSON-encoded plugin metadata including name, version, and caps.
@@ -309,6 +314,7 @@ class Frame:
         meta = {
             "max_frame": max_frame,
             "max_chunk": max_chunk,
+            "max_reorder_buffer": max_reorder_buffer,
             "version": PROTOCOL_VERSION,
             "manifest": manifest,
         }
@@ -428,19 +434,21 @@ class Frame:
         return frame
 
     @classmethod
-    def relay_notify(cls, manifest: bytes, max_frame: int, max_chunk: int) -> "Frame":
+    def relay_notify(cls, manifest: bytes, max_frame: int, max_chunk: int, max_reorder_buffer: int = DEFAULT_MAX_REORDER_BUFFER) -> "Frame":
         """Create a RELAY_NOTIFY frame for capability advertisement (slave → master).
 
         Args:
             manifest: Aggregate manifest bytes (JSON-encoded list of all plugin caps)
             max_frame: Maximum frame size for the relay connection
             max_chunk: Maximum chunk size for the relay connection
+            max_reorder_buffer: Maximum reorder buffer slots
         """
         frame = cls.new(FrameType.RELAY_NOTIFY, MessageId(0))
         frame.meta = {
             "manifest": manifest,
             "max_frame": max_frame,
             "max_chunk": max_chunk,
+            "max_reorder_buffer": max_reorder_buffer,
         }
         return frame
 
@@ -480,7 +488,10 @@ class Frame:
             return None
         if max_frame <= 0 or max_chunk <= 0:
             return None
-        return Limits(max_frame=max_frame, max_chunk=max_chunk)
+        max_reorder_buffer = self.meta.get("max_reorder_buffer")
+        if not isinstance(max_reorder_buffer, int) or max_reorder_buffer <= 0:
+            max_reorder_buffer = DEFAULT_MAX_REORDER_BUFFER
+        return Limits(max_frame=max_frame, max_chunk=max_chunk, max_reorder_buffer=max_reorder_buffer)
 
     def is_eof(self) -> bool:
         """Check if this is the final frame in a stream"""
@@ -554,6 +565,17 @@ class Frame:
         max_chunk = self.meta.get("max_chunk")
         if isinstance(max_chunk, int) and max_chunk > 0:
             return max_chunk
+        return None
+
+    def hello_max_reorder_buffer(self) -> Optional[int]:
+        """Extract max_reorder_buffer from HELLO metadata"""
+        if self.frame_type != FrameType.HELLO:
+            return None
+        if self.meta is None:
+            return None
+        val = self.meta.get("max_reorder_buffer")
+        if isinstance(val, int) and val > 0:
+            return val
         return None
 
     def hello_manifest(self) -> Optional[bytes]:

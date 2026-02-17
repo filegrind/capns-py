@@ -33,7 +33,7 @@ import queue
 from typing import Optional, List, Tuple, Dict
 from dataclasses import dataclass
 
-from capns.bifaci.frame import Frame, FrameType, Limits, MessageId
+from capns.bifaci.frame import Frame, FrameType, Limits, MessageId, DEFAULT_MAX_FRAME, DEFAULT_MAX_CHUNK, DEFAULT_MAX_REORDER_BUFFER
 from capns.bifaci.io import FrameReader, FrameWriter, CborError
 from capns.urn.cap_urn import CapUrn
 
@@ -413,6 +413,7 @@ class RelaySwitch:
         """Rebuild negotiated limits (minimum across all masters)"""
         min_frame = 2**63 - 1
         min_chunk = 2**63 - 1
+        min_reorder = 2**63 - 1
 
         for master in self._masters:
             if master.healthy:
@@ -420,13 +421,17 @@ class RelaySwitch:
                     min_frame = master.limits.max_frame
                 if master.limits.max_chunk < min_chunk:
                     min_chunk = master.limits.max_chunk
+                if master.limits.max_reorder_buffer < min_reorder:
+                    min_reorder = master.limits.max_reorder_buffer
 
         if min_frame == 2**63 - 1:
-            min_frame = Limits.DEFAULT_MAX_FRAME
+            min_frame = DEFAULT_MAX_FRAME
         if min_chunk == 2**63 - 1:
-            min_chunk = Limits.DEFAULT_MAX_CHUNK
+            min_chunk = DEFAULT_MAX_CHUNK
+        if min_reorder == 2**63 - 1:
+            min_reorder = DEFAULT_MAX_REORDER_BUFFER
 
-        self._negotiated_limits = Limits(max_frame=min_frame, max_chunk=min_chunk)
+        self._negotiated_limits = Limits(max_frame=min_frame, max_chunk=min_chunk, max_reorder_buffer=min_reorder)
 
 
 # =============================================================================

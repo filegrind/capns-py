@@ -136,7 +136,7 @@ class RelaySlave:
             manifest: Aggregate manifest JSON of all available plugin capabilities
             limits: Negotiated protocol limits
         """
-        frame = Frame.relay_notify(manifest, limits.max_frame, limits.max_chunk)
+        frame = Frame.relay_notify(manifest, limits.max_frame, limits.max_chunk, limits.max_reorder_buffer)
         socket_writer.write(frame)
 
 
