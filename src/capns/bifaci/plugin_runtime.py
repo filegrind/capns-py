@@ -474,6 +474,7 @@ class ThreadSafeEmitter:
                     self.chunk_index += 1
 
                 frame = Frame.chunk(self.request_id, self.stream_id, 0, cbor_payload, idx, compute_checksum(cbor_payload))
+                frame.routing_id = self.routing_id  # Propagate XID from incoming REQ
                 self.writer.write(frame)
 
         elif isinstance(value, dict):
@@ -487,6 +488,7 @@ class ThreadSafeEmitter:
                     self.chunk_index += 1
 
                 frame = Frame.chunk(self.request_id, self.stream_id, 0, cbor_payload, idx, compute_checksum(cbor_payload))
+                frame.routing_id = self.routing_id  # Propagate XID from incoming REQ
                 self.writer.write(frame)
 
         else:
@@ -498,6 +500,7 @@ class ThreadSafeEmitter:
                 self.chunk_index += 1
 
             frame = Frame.chunk(self.request_id, self.stream_id, 0, cbor_payload, idx, compute_checksum(cbor_payload))
+            frame.routing_id = self.routing_id  # Propagate XID from incoming REQ
             self.writer.write(frame)
 
     def finalize(self) -> None:
