@@ -1,29 +1,27 @@
 [build-system]
-requires = ["setuptools>=61.0"]
 build-backend = "setuptools.build_meta"
+requires = ["setuptools>=61.0"]
 
 [project]
-name = "capns"
-version = "0.65.27951"
+dependencies = ["tagged-urn>=0.7.2636", "cbor2>=5.4.0"]
 description = "Core cap URN and definition system for MACINA plugins"
-authors = [{name = "https://github.com/jowharshamshiri"}]
-license = {text = "MIT"}
+name = "capns"
 requires-python = ">=3.10"
-dependencies = [
-    "tagged-urn>=0.7.2636",
-    "cbor2>=5.4.0",
-]
+version = "0.66.27985"
+
+[[project.authors]]
+name = "https://github.com/jowharshamshiri"
+
+[project.license]
+text = "MIT"
 
 [project.optional-dependencies]
-dev = [
-    "pytest>=7.0",
-    "pytest-cov>=4.0",
-]
+dev = ["pytest>=7.0", "pytest-cov>=4.0"]
+
+[tool.pytest.ini_options]
+python_files = ["test_*.py"]
+python_functions = ["test_*"]
+testpaths = ["tests"]
 
 [tool.setuptools.packages.find]
 where = ["src"]
-
-[tool.pytest.ini_options]
-testpaths = ["tests"]
-python_files = ["test_*.py"]
-python_functions = ["test_*"]
