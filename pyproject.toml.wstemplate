@@ -4,13 +4,13 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "capns"
-version = "0.65.27951"
+version = "{{ project.version }}"
 description = "Core cap URN and definition system for MACINA plugins"
 authors = [{name = "https://github.com/jowharshamshiri"}]
 license = {text = "MIT"}
 requires-python = ">=3.10"
 dependencies = [
-    "tagged-urn>=0.7.2636",
+    "tagged-urn>={{ projects.tagged_urn_py.version }}",
     "cbor2>=5.4.0",
 ]
 
