@@ -1,0 +1,13 @@
+diff --git a/tests/test_response.py b/tests/test_response.py
+index ff29097..f0e5463 100644
+--- a/tests/test_response.py
++++ b/tests/test_response.py
+@@ -6,7 +6,7 @@ Tests use // TEST###: comments matching the Rust implementation for cross-tracki
+ import pytest
+ import json
+ from dataclasses import dataclass
+-from capns.response import ResponseWrapper
++from capns.cap.response import ResponseWrapper
+ 
+ 
+ @dataclass

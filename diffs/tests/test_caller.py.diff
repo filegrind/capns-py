@@ -1,0 +1,24 @@
+diff --git a/tests/test_caller.py b/tests/test_caller.py
+index 82b41a8..b42bdff 100644
+--- a/tests/test_caller.py
++++ b/tests/test_caller.py
+@@ -4,7 +4,7 @@ Tests use // TEST###: comments matching the Rust implementation for cross-tracki
+ """
+ 
+ import pytest
+-from capns.caller import (
++from capns.cap.caller import (
+     StdinSourceData,
+     StdinSourceFileReference,
+     CapArgumentValue,
+@@ -12,8 +12,8 @@ from capns.caller import (
+     CapSet,
+ )
+ from capns import Cap, CapUrn, CapArg
+-from capns.cap import PositionSource
+-from capns.media_urn import MEDIA_STRING, MEDIA_VOID, MEDIA_OBJECT
++from capns.cap.definition import PositionSource
++from capns.urn.media_urn import MEDIA_STRING, MEDIA_VOID, MEDIA_OBJECT
+ 
+ 
+ def _test_urn(tags: str) -> str:

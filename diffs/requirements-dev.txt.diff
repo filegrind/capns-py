@@ -1,0 +1,12 @@
+diff --git a/requirements-dev.txt b/requirements-dev.txt
+new file mode 100644
+index 0000000..c770314
+--- /dev/null
++++ b/requirements-dev.txt
+@@ -0,0 +1,6 @@
++# Development dependencies (includes runtime deps)
++-r requirements.txt
++
++# Testing
++pytest>=7.0
++pytest-cov>=4.0

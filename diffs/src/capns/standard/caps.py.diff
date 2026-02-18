@@ -1,0 +1,31 @@
+diff --git a/src/capns/standard/caps.py b/src/capns/standard/caps.py
+index c0e178f..6af2cdd 100644
+--- a/src/capns/standard/caps.py
++++ b/src/capns/standard/caps.py
+@@ -5,8 +5,8 @@ all MACINA providers. These are the single source of truth for URN construction.
+ """
+ 
+ from typing import Optional
+-from capns.cap_urn import CapUrn, CapUrnBuilder
+-from capns.media_urn import (
++from capns.urn.cap_urn import CapUrn, CapUrnBuilder
++from capns.urn.media_urn import (
+     # Primitives
+     MEDIA_STRING,
+     MEDIA_INTEGER,
+@@ -49,6 +49,15 @@ from capns.media_urn import (
+ )
+ 
+ 
++# =============================================================================
++# STANDARD CAP URN CONSTANTS
++# =============================================================================
++
++# Standard echo capability URN
++# Accepts any media type as input and outputs any media type
++CAP_IDENTITY = "cap:in=media:;out=media:"
++
++
+ # =============================================================================
+ # HELPER FUNCTIONS
+ # =============================================================================

@@ -1,0 +1,13 @@
+diff --git a/.gitignore b/.gitignore
+index d90bb71..53fda0c 100644
+--- a/.gitignore
++++ b/.gitignore
+@@ -40,4 +40,5 @@ htmlcov/
+ 
+ # OS
+ .DS_Store
+-Thumbs.db
+\ No newline at end of file
++Thumbs.db
++diffs/
+\ No newline at end of file
