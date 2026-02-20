@@ -1081,6 +1081,9 @@ class PluginRuntime:
                 break
 
             if frame.frame_type == FrameType.REQ:
+                # Extract routing_id (XID) FIRST — all error paths must include it
+                routing_id_for_errors = frame.routing_id
+
                 cap_urn = frame.cap
                 if cap_urn is None:
                     err_frame = Frame.err(
@@ -1088,6 +1091,7 @@ class PluginRuntime:
                         "INVALID_REQUEST",
                         "Request missing cap URN"
                     )
+                    err_frame.routing_id = routing_id_for_errors
                     try:
                         sync_writer.write(err_frame)
                     except Exception:
@@ -1103,6 +1107,7 @@ class PluginRuntime:
                         "PROTOCOL_ERROR",
                         "REQ frame must have empty payload — use STREAM_START for arguments"
                     )
+                    err_frame.routing_id = routing_id_for_errors
                     try:
                         sync_writer.write(err_frame)
                     except Exception:
