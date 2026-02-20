@@ -18,7 +18,7 @@ from capns.bifaci.frame import (
 
 
 # TEST171: Test all FrameType discriminants roundtrip through u8 conversion preserving identity
-def test_frame_type_roundtrip():
+def test_171_frame_type_roundtrip():
     """Test all frame types roundtrip through u8 conversion"""
     for t in [
         FrameType.HELLO,
@@ -39,7 +39,7 @@ def test_frame_type_roundtrip():
 
 
 # TEST172: Test FrameType::from_u8 returns None for values outside the valid discriminant range
-def test_invalid_frame_type():
+def test_172_invalid_frame_type():
     """Test invalid frame type values return None"""
     assert FrameType.from_u8(10) == FrameType.RELAY_NOTIFY
     assert FrameType.from_u8(11) == FrameType.RELAY_STATE
@@ -49,7 +49,7 @@ def test_invalid_frame_type():
 
 
 # TEST173: Test FrameType discriminant values match the wire protocol specification exactly
-def test_frame_type_discriminant_values():
+def test_173_frame_type_discriminant_values():
     """Test frame type values match protocol specification"""
     assert FrameType.HELLO == 0
     assert FrameType.REQ == 1
@@ -64,7 +64,7 @@ def test_frame_type_discriminant_values():
 
 
 # TEST174: Test MessageId::new_uuid generates valid UUID that roundtrips through string conversion
-def test_message_id_uuid():
+def test_174_message_id_uuid():
     """Test MessageId UUID generation and string roundtrip"""
     id = MessageId.new_uuid()
     s = id.to_uuid_string()
@@ -75,7 +75,7 @@ def test_message_id_uuid():
 
 
 # TEST175: Test two MessageId::new_uuid calls produce distinct IDs (no collisions)
-def test_message_id_uuid_uniqueness():
+def test_175_message_id_uuid_uniqueness():
     """Test UUID uniqueness"""
     id1 = MessageId.new_uuid()
     id2 = MessageId.new_uuid()
@@ -83,14 +83,14 @@ def test_message_id_uuid_uniqueness():
 
 
 # TEST176: Test MessageId::Uint does not produce a UUID string, to_uuid_string returns None
-def test_message_id_uint_has_no_uuid_string():
+def test_176_message_id_uint_has_no_uuid_string():
     """Test Uint IDs have no UUID string representation"""
     id = MessageId(42)
     assert id.to_uuid_string() is None, "Uint IDs have no UUID representation"
 
 
 # TEST177: Test MessageId::from_uuid_str rejects invalid UUID strings
-def test_message_id_from_invalid_uuid_str():
+def test_177_message_id_from_invalid_uuid_str():
     """Test invalid UUID strings are rejected"""
     assert MessageId.from_uuid_str("not-a-uuid") is None
     assert MessageId.from_uuid_str("") is None
@@ -98,7 +98,7 @@ def test_message_id_from_invalid_uuid_str():
 
 
 # TEST178: Test MessageId::as_bytes produces correct byte representations for Uuid and Uint variants
-def test_message_id_as_bytes():
+def test_178_message_id_as_bytes():
     """Test MessageId as_bytes for both variants"""
     uuid_id = MessageId.new_uuid()
     uuid_bytes = uuid_id.as_bytes()
@@ -111,14 +111,14 @@ def test_message_id_as_bytes():
 
 
 # TEST179: Test MessageId::default creates a UUID variant (not Uint)
-def test_message_id_default_is_uuid():
+def test_179_message_id_default_is_uuid():
     """Test default MessageId is UUID"""
     id = MessageId.default()
     assert id.to_uuid_string() is not None, "default MessageId must be UUID"
 
 
 # TEST180: Test Frame::hello without manifest produces correct HELLO frame for host side
-def test_hello_frame():
+def test_180_hello_frame():
     """Test HELLO frame creation (host side)"""
     frame = Frame.hello(1_000_000, 100_000)
     assert frame.frame_type == FrameType.HELLO
@@ -132,7 +132,7 @@ def test_hello_frame():
 
 
 # TEST181: Test Frame::hello_with_manifest produces HELLO with manifest bytes for plugin side
-def test_hello_frame_with_manifest():
+def test_181_hello_frame_with_manifest():
     """Test HELLO frame with manifest (plugin side)"""
     manifest_json = b'{"name":"TestPlugin","version":"1.0.0","description":"Test","caps":[]}'
     frame = Frame.hello_with_manifest(1_000_000, 100_000, manifest_json)
@@ -145,7 +145,7 @@ def test_hello_frame_with_manifest():
 
 
 # TEST182: Test Frame::req stores cap URN, payload, and content_type correctly
-def test_req_frame():
+def test_182_req_frame():
     """Test REQ frame creation"""
     id = MessageId.new_uuid()
     frame = Frame.req(id, "cap:op=test", b"payload", "application/json")
@@ -161,7 +161,7 @@ def test_req_frame():
 
 
 # TEST184: Test Frame::chunk stores stream_id, seq and payload for streaming
-def test_chunk_frame():
+def test_184_chunk_frame():
     """Test CHUNK frame creation with stream_id (Protocol v2)"""
     id = MessageId.new_uuid()
     payload = b"data"
@@ -177,7 +177,7 @@ def test_chunk_frame():
 
 
 # TEST185: Test Frame::err stores error code and message in metadata
-def test_err_frame():
+def test_185_err_frame():
     """Test ERR frame creation"""
     id = MessageId.new_uuid()
     frame = Frame.err(id, "NOT_FOUND", "Cap not found")
@@ -187,7 +187,7 @@ def test_err_frame():
 
 
 # TEST186: Test Frame::log stores level and message in metadata
-def test_log_frame():
+def test_186_log_frame():
     """Test LOG frame creation"""
     id = MessageId.new_uuid()
     frame = Frame.log(id, "info", "Processing started")
@@ -198,7 +198,7 @@ def test_log_frame():
 
 
 # TEST187: Test Frame::end with payload sets eof and optional final payload
-def test_end_frame_with_payload():
+def test_187_end_frame_with_payload():
     """Test END frame with payload"""
     id = MessageId.new_uuid()
     frame = Frame.end(id, b"final")
@@ -208,7 +208,7 @@ def test_end_frame_with_payload():
 
 
 # TEST188: Test Frame::end without payload still sets eof marker
-def test_end_frame_without_payload():
+def test_188_end_frame_without_payload():
     """Test END frame without payload"""
     id = MessageId.new_uuid()
     frame = Frame.end(id, None)
@@ -218,7 +218,7 @@ def test_end_frame_without_payload():
 
 
 # TEST189: Test chunk_with_offset sets offset on all chunks but len only on seq=0
-def test_chunk_with_offset():
+def test_189_chunk_with_offset():
     """Test CHUNK frame with offset information"""
     id = MessageId.new_uuid()
 
@@ -242,7 +242,7 @@ def test_chunk_with_offset():
 
 
 # TEST190: Test Frame::heartbeat creates minimal frame with no payload or metadata
-def test_heartbeat_frame():
+def test_190_heartbeat_frame():
     """Test HEARTBEAT frame creation"""
     id = MessageId.new_uuid()
     frame = Frame.heartbeat(id)
@@ -254,7 +254,7 @@ def test_heartbeat_frame():
 
 
 # TEST191: Test error_code and error_message return None for non-Err frame types
-def test_error_accessors_on_non_err_frame():
+def test_191_error_accessors_on_non_err_frame():
     """Test error accessors return None for non-ERR frames"""
     req = Frame.req(MessageId.new_uuid(), "cap:op=test", b"", "text/plain")
     assert req.error_code() is None, "REQ must have no error_code"
@@ -265,7 +265,7 @@ def test_error_accessors_on_non_err_frame():
 
 
 # TEST192: Test log_level and log_message return None for non-Log frame types
-def test_log_accessors_on_non_log_frame():
+def test_192_log_accessors_on_non_log_frame():
     """Test log accessors return None for non-LOG frames"""
     req = Frame.req(MessageId.new_uuid(), "cap:op=test", b"", "text/plain")
     assert req.log_level() is None, "REQ must have no log_level"
@@ -273,7 +273,7 @@ def test_log_accessors_on_non_log_frame():
 
 
 # TEST193: Test hello_max_frame and hello_max_chunk return None for non-Hello frame types
-def test_hello_accessors_on_non_hello_frame():
+def test_193_hello_accessors_on_non_hello_frame():
     """Test hello accessors return None for non-HELLO frames"""
     err = Frame.err(MessageId.new_uuid(), "E", "m")
     assert err.hello_max_frame() is None
@@ -282,7 +282,7 @@ def test_hello_accessors_on_non_hello_frame():
 
 
 # TEST194: Test Frame::new sets version and defaults correctly, optional fields are None
-def test_frame_new_defaults():
+def test_194_frame_new_defaults():
     """Test Frame.new sets correct defaults"""
     id = MessageId.new_uuid()
     frame = Frame.new(FrameType.CHUNK, id)
@@ -300,7 +300,7 @@ def test_frame_new_defaults():
 
 
 # TEST195: Test Frame::default creates a Req frame (the documented default)
-def test_frame_default():
+def test_195_frame_default():
     """Test Frame.default creates REQ frame"""
     frame = Frame.default()
     assert frame.frame_type == FrameType.REQ
@@ -308,14 +308,14 @@ def test_frame_default():
 
 
 # TEST196: Test is_eof returns false when eof field is None (unset)
-def test_is_eof_when_none():
+def test_196_is_eof_when_none():
     """Test is_eof with None"""
     frame = Frame.new(FrameType.CHUNK, MessageId(0))
     assert not frame.is_eof(), "eof=None must mean not EOF"
 
 
 # TEST197: Test is_eof returns false when eof field is explicitly Some(false)
-def test_is_eof_when_false():
+def test_197_is_eof_when_false():
     """Test is_eof with explicit False"""
     frame = Frame.new(FrameType.CHUNK, MessageId(0))
     frame.eof = False
@@ -323,7 +323,7 @@ def test_is_eof_when_false():
 
 
 # TEST198: Test Limits::default provides the documented default values
-def test_limits_default():
+def test_198_limits_default():
     """Test Limits.default values"""
     limits = Limits.default()
     assert limits.max_frame == DEFAULT_MAX_FRAME
@@ -333,13 +333,13 @@ def test_limits_default():
 
 
 # TEST199: Test PROTOCOL_VERSION is 2
-def test_protocol_version_constant():
+def test_199_protocol_version_constant():
     """Test PROTOCOL_VERSION constant"""
     assert PROTOCOL_VERSION == 2
 
 
 # TEST200: Test integer key constants match the protocol specification
-def test_key_constants():
+def test_200_key_constants():
     """Test Keys constants match specification"""
     assert Keys.VERSION == 0
     assert Keys.FRAME_TYPE == 1
@@ -355,7 +355,7 @@ def test_key_constants():
 
 
 # TEST201: Test hello_with_manifest preserves binary manifest data (not just JSON text)
-def test_hello_manifest_binary_data():
+def test_201_hello_manifest_binary_data():
     """Test manifest preserves binary data"""
     binary_manifest = bytes([0x00, 0x01, 0xFF, 0xFE, 0x80])
     frame = Frame.hello_with_manifest(1000, 500, binary_manifest)
@@ -363,7 +363,7 @@ def test_hello_manifest_binary_data():
 
 
 # TEST202: Test MessageId Eq/Hash semantics: equal UUIDs are equal, different ones are not
-def test_message_id_equality_and_hash():
+def test_202_message_id_equality_and_hash():
     """Test MessageId equality and hashing"""
     id1 = MessageId(bytes([1] * 16))
     id2 = MessageId(bytes([1] * 16))
@@ -386,7 +386,7 @@ def test_message_id_equality_and_hash():
 
 
 # TEST203: Test Uuid and Uint variants of MessageId are never equal even for coincidental byte values
-def test_message_id_cross_variant_inequality():
+def test_203_message_id_cross_variant_inequality():
     """Test UUID and Uint variants are never equal"""
     uuid_id = MessageId(bytes([0] * 16))
     uint_id = MessageId(0)
@@ -394,14 +394,14 @@ def test_message_id_cross_variant_inequality():
 
 
 # TEST204: Test Frame::req with empty payload stores Some(empty vec) not None
-def test_req_frame_empty_payload():
+def test_204_req_frame_empty_payload():
     """Test REQ frame with empty payload"""
     frame = Frame.req(MessageId.new_uuid(), "cap:op=test", b"", "text/plain")
     assert frame.payload == b"", "empty payload is still bytes, not None"
 
 
 # TEST365: Frame::stream_start stores req_id, stream_id, media_urn
-def test_stream_start_frame():
+def test_365_stream_start_frame():
     """Test STREAM_START frame stores all fields"""
     req_id = MessageId.new_uuid()
     stream_id = "stream-abc-123"
@@ -416,7 +416,7 @@ def test_stream_start_frame():
 
 
 # TEST366: Frame::stream_end stores req_id, stream_id, chunk_count
-def test_stream_end_frame():
+def test_366_stream_end_frame():
     """Test STREAM_END frame stores req_id and stream_id"""
     req_id = MessageId.new_uuid()
     stream_id = "stream-xyz-456"
@@ -432,7 +432,7 @@ def test_stream_end_frame():
 
 
 # TEST367: Frame::stream_start with empty stream_id still constructs
-def test_stream_start_with_empty_stream_id():
+def test_367_stream_start_with_empty_stream_id():
     """Test STREAM_START with empty stream_id"""
     req_id = MessageId.new_uuid()
     frame = Frame.stream_start(req_id, "", "media:json")
@@ -443,7 +443,7 @@ def test_stream_start_with_empty_stream_id():
 
 
 # TEST368: Frame::stream_start with empty media_urn still constructs
-def test_stream_start_with_empty_media_urn():
+def test_368_stream_start_with_empty_media_urn():
     """Test STREAM_START with empty media_urn"""
     req_id = MessageId.new_uuid()
     frame = Frame.stream_start(req_id, "stream-test", "")
@@ -454,7 +454,7 @@ def test_stream_start_with_empty_media_urn():
 
 
 # TEST399: RelayNotify discriminant roundtrips through u8 conversion (value 10)
-def test_relay_notify_discriminant_roundtrip():
+def test_399_relay_notify_discriminant_roundtrip():
     """Test RelayNotify discriminant value is 10 and roundtrips"""
     ft = FrameType.RELAY_NOTIFY
     assert int(ft) == 10
@@ -463,7 +463,7 @@ def test_relay_notify_discriminant_roundtrip():
 
 
 # TEST400: RelayState discriminant roundtrips through u8 conversion (value 11)
-def test_relay_state_discriminant_roundtrip():
+def test_400_relay_state_discriminant_roundtrip():
     """Test RelayState discriminant value is 11 and roundtrips"""
     ft = FrameType.RELAY_STATE
     assert int(ft) == 11
@@ -472,7 +472,7 @@ def test_relay_state_discriminant_roundtrip():
 
 
 # TEST401: relay_notify factory stores manifest and limits, accessors extract them correctly
-def test_relay_notify_factory_and_accessors():
+def test_401_relay_notify_factory_and_accessors():
     """Test relay_notify factory and accessor methods"""
     manifest = b'{"caps":["cap:op=test"]}'
     max_frame = 2_000_000
@@ -500,7 +500,7 @@ def test_relay_notify_factory_and_accessors():
 
 
 # TEST402: relay_state factory stores resource payload in payload field
-def test_relay_state_factory_and_payload():
+def test_402_relay_state_factory_and_payload():
     """Test relay_state factory stores resources in payload"""
     resources = b'{"gpu_memory":8192}'
 
@@ -511,6 +511,6 @@ def test_relay_state_factory_and_payload():
 
 
 # TEST403: FrameType::from_u8(12) returns None (one past RelayState)
-def test_frame_type_one_past_relay_state():
+def test_403_frame_type_one_past_relay_state():
     """Test that value 12 is invalid (one past RelayState)"""
     assert FrameType.from_u8(12) is None, "value 12 is one past RelayState"

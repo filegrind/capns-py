@@ -17,7 +17,7 @@ class SampleStruct:
 
 
 # TEST168: Test ResponseWrapper from JSON deserializes to correct structured type
-def test_json_response():
+def test_168_json_response():
     test_data = SampleStruct(name="test", value=42)
     json_str = json.dumps({"name": "test", "value": 42})
     response = ResponseWrapper.from_json(json_str.encode('utf-8'))
@@ -28,7 +28,7 @@ def test_json_response():
 
 
 # TEST169: Test ResponseWrapper converts to primitive types integer, float, boolean, string
-def test_primitive_types():
+def test_169_primitive_types():
     # Test integer
     response = ResponseWrapper.from_text(b"42")
     assert response.as_int() == 42
@@ -47,7 +47,7 @@ def test_primitive_types():
 
 
 # TEST170: Test ResponseWrapper from binary stores and retrieves raw bytes correctly
-def test_binary_response():
+def test_170_binary_response():
     binary_data = bytes([0x89, 0x50, 0x4E, 0x47])  # PNG header
     response = ResponseWrapper.from_binary(binary_data)
 

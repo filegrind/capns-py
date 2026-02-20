@@ -123,13 +123,13 @@ class CapUrn:
         if in_urn != "media:":
             try:
                 MediaUrn.from_string(in_urn)
-            except MediaUrnError as e:
+            except Exception as e:
                 raise CapUrnError(f"Invalid media URN for in spec '{in_urn}': {e}") from e
 
         if out_urn != "media:":
             try:
                 MediaUrn.from_string(out_urn)
-            except MediaUrnError as e:
+            except Exception as e:
                 raise CapUrnError(f"Invalid media URN for out spec '{out_urn}': {e}") from e
 
         # Collect remaining tags (excluding in/out)

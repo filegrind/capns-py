@@ -78,7 +78,7 @@ def simulate_plugin(plugin_read, plugin_write, manifest_str, handler=None):
 
 
 # TEST413: RegisterPlugin adds entries to capTable
-def test_register_plugin_adds_cap_table():
+def test_413_register_plugin_adds_cap_table():
     host = PluginHost()
     host.register_plugin("/path/to/converter", ["cap:op=convert", "cap:op=analyze"])
 
@@ -93,7 +93,7 @@ def test_register_plugin_adds_cap_table():
 
 
 # TEST414: Capabilities() returns None when no plugins are running
-def test_capabilities_empty_initially():
+def test_414_capabilities_empty_initially():
     host = PluginHost()
     assert host.capabilities() is None, "no plugins → None capabilities"
     host.register_plugin("/path/to/plugin", ["cap:op=test"])
@@ -101,7 +101,7 @@ def test_capabilities_empty_initially():
 
 
 # TEST415: REQ for known cap triggers spawn (expect error for non-existent binary)
-def test_req_triggers_spawn():
+def test_415_req_triggers_spawn():
     host = PluginHost()
     host.register_plugin("/nonexistent/plugin/binary", ["cap:op=test"])
 
@@ -131,7 +131,7 @@ def test_req_triggers_spawn():
 
 
 # TEST416: AttachPlugin performs HELLO handshake, extracts manifest, updates capabilities
-def test_attach_plugin_handshake():
+def test_416_attach_plugin_handshake():
     manifest = '{"name":"Test","version":"1.0","caps":[{"urn":"cap:in=media:;out=media:"}]}'
     hr, hw, pr, pw, hs, ps = make_conn()
 
@@ -158,7 +158,7 @@ def test_attach_plugin_handshake():
 
 
 # TEST417: Route REQ to correct plugin by cap_urn (two plugins)
-def test_route_req_by_cap_urn():
+def test_417_route_req_by_cap_urn():
     manifest_a = '{"name":"A","version":"1.0","caps":[{"urn":"cap:op=convert"}]}'
     manifest_b = '{"name":"B","version":"1.0","caps":[{"urn":"cap:op=analyze"}]}'
 
@@ -219,7 +219,7 @@ def test_route_req_by_cap_urn():
 
 
 # TEST418: Route STREAM_START/CHUNK/STREAM_END/END by req_id
-def test_route_continuation_by_req_id():
+def test_418_route_continuation_by_req_id():
     manifest = '{"name":"Test","version":"1.0","caps":[{"urn":"cap:op=cont"}]}'
     hr, hw, pr, pw, hs, ps = make_conn()
 
@@ -278,7 +278,7 @@ def test_route_continuation_by_req_id():
 
 
 # TEST419: Plugin HEARTBEAT handled locally (not forwarded to relay)
-def test_heartbeat_local_handling():
+def test_419_heartbeat_local_handling():
     manifest = '{"name":"Test","version":"1.0","caps":[{"urn":"cap:op=hb"}]}'
     hr, hw, pr, pw, hs, ps = make_conn()
 
@@ -340,7 +340,7 @@ def test_heartbeat_local_handling():
 
 
 # TEST420: Plugin non-HELLO/non-HB frames forwarded to relay
-def test_plugin_frames_forwarded_to_relay():
+def test_420_plugin_frames_forwarded_to_relay():
     manifest = '{"name":"Test","version":"1.0","caps":[{"urn":"cap:op=fwd"}]}'
     hr, hw, pr, pw, hs, ps = make_conn()
 
@@ -398,7 +398,7 @@ def test_plugin_frames_forwarded_to_relay():
 
 
 # TEST421: Plugin death updates capability list (removes dead plugin's caps)
-def test_plugin_death_updates_caps():
+def test_421_plugin_death_updates_caps():
     manifest = '{"name":"Test","version":"1.0","caps":[{"urn":"cap:op=die"}]}'
     hr, hw, pr, pw, hs, ps = make_conn()
 
@@ -439,7 +439,7 @@ def test_plugin_death_updates_caps():
 
 
 # TEST422: Plugin death sends ERR for all pending requests
-def test_plugin_death_sends_err():
+def test_422_plugin_death_sends_err():
     manifest = '{"name":"Test","version":"1.0","caps":[{"urn":"cap:op=die"}]}'
     hr, hw, pr, pw, hs, ps = make_conn()
 
@@ -487,7 +487,7 @@ def test_plugin_death_sends_err():
 
 
 # TEST423: Multiple plugins with distinct caps route independently
-def test_multi_plugin_distinct_caps():
+def test_423_multi_plugin_distinct_caps():
     manifest_a = '{"name":"A","version":"1.0","caps":[{"urn":"cap:op=alpha"}]}'
     manifest_b = '{"name":"B","version":"1.0","caps":[{"urn":"cap:op=beta"}]}'
 
@@ -568,7 +568,7 @@ def test_multi_plugin_distinct_caps():
 
 
 # TEST424: Concurrent requests to same plugin handled independently
-def test_concurrent_requests_same_plugin():
+def test_424_concurrent_requests_same_plugin():
     manifest = '{"name":"Test","version":"1.0","caps":[{"urn":"cap:op=conc"}]}'
     hr, hw, pr, pw, hs, ps = make_conn()
 
@@ -635,7 +635,7 @@ def test_concurrent_requests_same_plugin():
 
 
 # TEST425: FindPluginForCap returns None for unknown cap
-def test_find_plugin_for_cap_unknown():
+def test_425_find_plugin_for_cap_unknown():
     host = PluginHost()
     host.register_plugin("/path/to/plugin", ["cap:op=known"])
 

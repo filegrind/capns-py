@@ -22,7 +22,7 @@ def _test_urn(tags: str) -> str:
 
 
 # TEST163: Test argument schema validation succeeds with valid JSON matching schema
-def test_argument_schema_validation_success():
+def test_163_argument_schema_validation_success():
     validator = SchemaValidator()
 
     schema = {
@@ -53,7 +53,7 @@ def test_argument_schema_validation_success():
 
 
 # TEST164: Test argument schema validation fails with JSON missing required fields
-def test_argument_schema_validation_failure():
+def test_164_argument_schema_validation_failure():
     validator = SchemaValidator()
 
     schema = {
@@ -86,7 +86,7 @@ def test_argument_schema_validation_failure():
 
 
 # TEST165: Test output schema validation succeeds with valid JSON matching schema
-def test_output_schema_validation_success():
+def test_165_output_schema_validation_success():
     validator = SchemaValidator()
 
     schema = {
@@ -117,7 +117,7 @@ def test_output_schema_validation_success():
 
 
 # TEST166: Test validation skipped when resolved media spec has no schema
-def test_skip_validation_without_schema():
+def test_166_skip_validation_without_schema():
     validator = SchemaValidator()
 
     # Create cap without media_specs
@@ -133,7 +133,7 @@ def test_skip_validation_without_schema():
 
 
 # TEST167: Test validation with unresolved media URN skips validation gracefully
-def test_unresolved_media_urn_skips_validation():
+def test_167_unresolved_media_urn_skips_validation():
     validator = SchemaValidator()
 
     urn = CapUrn.from_string(_test_urn("type=test;op=validate"))

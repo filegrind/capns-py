@@ -70,7 +70,7 @@ def invoke_op(factory: OpFactory, frames: queue.Queue, emitter) -> None:
 
 
 # TEST248: Test register_op and find_handler by exact cap URN
-def test_register_and_find_handler():
+def test_248_register_and_find_handler():
     class EmitBytesOp(Op):
         async def perform(self, dry, wet):
             req = wet.get_required(WET_KEY_REQUEST)
@@ -84,7 +84,7 @@ def test_register_and_find_handler():
 
 
 # TEST249: Test register_op handler echoes bytes directly
-def test_raw_handler():
+def test_249_raw_handler():
     received = []
 
     class EchoOp(Op):
@@ -115,7 +115,7 @@ def test_raw_handler():
 
 
 # TEST250: Test Op handler collects input and processes it
-def test_typed_handler_deserialization():
+def test_250_typed_handler_deserialization():
     received = []
 
     class JsonKeyOp(Op):
@@ -148,7 +148,7 @@ def test_typed_handler_deserialization():
 
 
 # TEST251: Test Op handler propagates errors through HandlerError
-def test_typed_handler_rejects_invalid_json():
+def test_251_typed_handler_rejects_invalid_json():
     class JsonParseOp(Op):
         async def perform(self, dry, wet):
             req = wet.get_required(WET_KEY_REQUEST)
@@ -178,13 +178,13 @@ def test_typed_handler_rejects_invalid_json():
 
 
 # TEST252: Test find_handler returns None for unregistered cap URNs
-def test_find_handler_unknown_cap():
+def test_252_find_handler_unknown_cap():
     runtime = PluginRuntime(TEST_MANIFEST.encode('utf-8'))
     assert runtime.find_handler("cap:op=nonexistent") is None
 
 
 # TEST253: Test OpFactory can be used across threads (Send + Sync equivalent)
-def test_handler_is_send_sync():
+def test_253_handler_is_send_sync():
     import threading
 
     received = []
@@ -215,7 +215,7 @@ def test_handler_is_send_sync():
 
 
 # TEST254: Test NoPeerInvoker always returns PeerRequest error regardless of arguments
-def test_no_peer_invoker():
+def test_254_no_peer_invoker():
     no_peer = NoPeerInvoker()
 
     with pytest.raises(PeerRequestError) as exc_info:
@@ -225,7 +225,7 @@ def test_no_peer_invoker():
 
 
 # TEST255: Test NoPeerInvoker returns error even with valid arguments
-def test_no_peer_invoker_with_arguments():
+def test_255_no_peer_invoker_with_arguments():
     no_peer = NoPeerInvoker()
     args = [CapArgumentValue.from_str("media:test", "value")]
 
@@ -234,7 +234,7 @@ def test_no_peer_invoker_with_arguments():
 
 
 # TEST256: Test PluginRuntime::with_manifest_json stores manifest data and parses when valid
-def test_with_manifest_json():
+def test_256_with_manifest_json():
     runtime_basic = PluginRuntime.with_manifest_json(TEST_MANIFEST)
     assert len(runtime_basic.manifest_data) > 0
 
@@ -245,14 +245,14 @@ def test_with_manifest_json():
 
 
 # TEST257: Test PluginRuntime::new with invalid JSON still creates runtime (manifest is None)
-def test_new_with_invalid_json():
+def test_257_new_with_invalid_json():
     runtime = PluginRuntime(b"not json")
     assert len(runtime.manifest_data) > 0
     assert runtime.manifest is None, "invalid JSON should leave manifest as None"
 
 
 # TEST258: Test PluginRuntime::with_manifest creates runtime with valid manifest data
-def test_with_manifest_struct():
+def test_258_with_manifest_struct():
     manifest_dict = json.loads(VALID_MANIFEST)
     manifest = CapManifest.from_dict(manifest_dict)
     runtime = PluginRuntime.with_manifest(manifest)
@@ -261,7 +261,7 @@ def test_with_manifest_struct():
 
 
 # TEST259: Test extract_effective_payload with single stream matching cap in_spec
-def test_extract_effective_payload_non_cbor():
+def test_259_extract_effective_payload_non_cbor():
     # Single stream with data matching the cap's input spec
     streams = [
         ("stream-0", PendingStream(media_urn="media:bytes", chunks=[b"raw data"], complete=True))
@@ -271,7 +271,7 @@ def test_extract_effective_payload_non_cbor():
 
 
 # TEST260: Test extract_effective_payload with wildcard in_spec accepts any stream
-def test_extract_effective_payload_no_content_type():
+def test_260_extract_effective_payload_no_content_type():
     streams = [
         ("stream-0", PendingStream(media_urn="media:bytes", chunks=[b"raw data"], complete=True))
     ]
@@ -280,7 +280,7 @@ def test_extract_effective_payload_no_content_type():
 
 
 # TEST261: Test extract_effective_payload extracts matching stream by media URN
-def test_extract_effective_payload_cbor_match():
+def test_261_extract_effective_payload_cbor_match():
     # Stream with media URN that matches cap's input spec
     streams = [
         ("stream-0", PendingStream(
@@ -297,7 +297,7 @@ def test_extract_effective_payload_cbor_match():
 
 
 # TEST262: Test extract_effective_payload fails when no stream matches expected input
-def test_extract_effective_payload_cbor_no_match():
+def test_262_extract_effective_payload_cbor_no_match():
     # Multiple streams, none match cap's specific input spec
     streams = [
         ("stream-0", PendingStream(
@@ -322,7 +322,7 @@ def test_extract_effective_payload_cbor_no_match():
 
 
 # TEST263: Test extract_effective_payload with empty streams returns error
-def test_extract_effective_payload_invalid_cbor():
+def test_263_extract_effective_payload_invalid_cbor():
     # No streams provided
     streams = []
     with pytest.raises(DeserializeError) as exc_info:
@@ -334,7 +334,7 @@ def test_extract_effective_payload_invalid_cbor():
 
 
 # TEST264: Test extract_effective_payload with incomplete stream skips it
-def test_extract_effective_payload_cbor_not_array():
+def test_264_extract_effective_payload_cbor_not_array():
     # Stream that's not complete
     streams = [
         ("stream-0", PendingStream(media_urn="media:bytes", chunks=[b"data"], complete=False))
@@ -350,7 +350,7 @@ def test_extract_effective_payload_cbor_not_array():
 
 
 # TEST265: Test extract_effective_payload with invalid cap URN returns CapUrn error
-def test_extract_effective_payload_invalid_cap_urn():
+def test_265_extract_effective_payload_invalid_cap_urn():
     streams = []
 
     with pytest.raises(CapUrnError):
@@ -361,7 +361,7 @@ def test_extract_effective_payload_invalid_cap_urn():
 
 
 # TEST266: Test CliStreamEmitter writes to stdout and stderr correctly (basic construction)
-def test_cli_stream_emitter_construction():
+def test_266_cli_stream_emitter_construction():
     emitter = CliStreamEmitter()
     assert emitter.ndjson, "default CLI emitter must use NDJSON"
 
@@ -370,7 +370,7 @@ def test_cli_stream_emitter_construction():
 
 
 # TEST268: Test RuntimeError variants display correct messages
-def test_runtime_error_display():
+def test_268_runtime_error_display():
     err = NoHandlerError("cap:op=missing")
     assert "cap:op=missing" in str(err)
 
@@ -391,7 +391,7 @@ def test_runtime_error_display():
 
 
 # TEST270: Test registering multiple Op handlers for different caps and finding each independently
-def test_multiple_handlers():
+def test_270_multiple_handlers():
     class EchoTagOp(Op):
         def __init__(self, tag: bytes):
             self.tag = tag
@@ -418,7 +418,7 @@ def test_multiple_handlers():
 
 
 # TEST271: Test Op handler replacing an existing registration for the same cap URN
-def test_handler_replacement():
+def test_271_handler_replacement():
     result2 = []
 
     class FirstOp(Op):
@@ -449,7 +449,7 @@ def test_handler_replacement():
 
 
 # TEST272: Test extract_effective_payload with multiple streams selects the correct one
-def test_extract_effective_payload_multiple_args():
+def test_272_extract_effective_payload_multiple_args():
     # Multiple streams, only one matches the cap's input spec
     streams = [
         ("stream-0", PendingStream(
@@ -472,7 +472,7 @@ def test_extract_effective_payload_multiple_args():
 
 
 # TEST273: Test extract_effective_payload with binary data in stream (not just text)
-def test_extract_effective_payload_binary_value():
+def test_273_extract_effective_payload_binary_value():
     binary_data = bytes(range(256))
     streams = [
         ("stream-0", PendingStream(

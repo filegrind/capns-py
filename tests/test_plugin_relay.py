@@ -19,7 +19,7 @@ def make_pipe():
 
 
 # TEST404: Slave sends RelayNotify on connect (initial_notify parameter)
-def test_slave_sends_relay_notify_on_connect():
+def test_404_slave_sends_relay_notify_on_connect():
     """Verify slave sends RelayNotify with manifest and limits on connect"""
     manifest = b'{"caps":["cap:op=test"]}'
     limits = Limits.default()
@@ -53,7 +53,7 @@ def test_slave_sends_relay_notify_on_connect():
 
 
 # TEST405: Master reads RelayNotify and extracts manifest + limits
-def test_master_reads_relay_notify():
+def test_405_master_reads_relay_notify():
     """Verify master connects by reading initial RelayNotify"""
     manifest = b'{"caps":["cap:op=convert"]}'
     limits = Limits(max_frame=1_000_000, max_chunk=64_000)
@@ -81,7 +81,7 @@ def test_master_reads_relay_notify():
 
 
 # TEST406: Slave stores RelayState from master (resource_state() returns payload)
-def test_slave_stores_relay_state():
+def test_406_slave_stores_relay_state():
     """Verify slave stores RelayState payload"""
     resources = b'{"memory_mb":4096}'
 
@@ -118,7 +118,7 @@ def test_slave_stores_relay_state():
 
 
 # TEST407: Protocol frames pass through slave transparently (both directions)
-def test_protocol_frames_pass_through():
+def test_407_protocol_frames_pass_through():
     """Verify REQ and CHUNK pass through the relay"""
     slave_socket_read, master_socket_write = make_pipe()
     master_socket_read, slave_socket_write = make_pipe()
@@ -207,7 +207,7 @@ def test_protocol_frames_pass_through():
 
 
 # TEST408: RelayNotify/RelayState are NOT forwarded through relay (intercepted)
-def test_relay_frames_not_forwarded():
+def test_408_relay_frames_not_forwarded():
     """Verify RelayState is intercepted, only normal frames forwarded"""
     slave_socket_read, master_socket_write = make_pipe()
     runtime_read, slave_local_write = make_pipe()
@@ -274,7 +274,7 @@ def test_relay_frames_not_forwarded():
 
 
 # TEST409: Slave can inject RelayNotify mid-stream (cap change)
-def test_slave_injects_relay_notify_midstream():
+def test_409_slave_injects_relay_notify_midstream():
     """Verify slave can send RelayNotify between normal frames"""
     master_socket_read, slave_socket_write = make_pipe()
 
@@ -323,7 +323,7 @@ def test_slave_injects_relay_notify_midstream():
 
 
 # TEST410: Master receives updated RelayNotify (cap change via read_frame)
-def test_master_receives_updated_relay_notify():
+def test_410_master_receives_updated_relay_notify():
     """Verify master intercepts updated RelayNotify and updates state"""
     master_socket_read, slave_socket_write = make_pipe()
 
@@ -384,7 +384,7 @@ def test_master_receives_updated_relay_notify():
 
 
 # TEST411: Socket close detection (both directions)
-def test_socket_close_detection():
+def test_411_socket_close_detection():
     """Verify closed socket is detected in both directions"""
     # Master -> slave direction: master closes, slave detects
     slave_socket_read, master_socket_write = make_pipe()
@@ -418,7 +418,7 @@ def test_socket_close_detection():
 
 
 # TEST412: Bidirectional concurrent frame flow through relay
-def test_bidirectional_concurrent_flow():
+def test_412_bidirectional_concurrent_flow():
     """Verify frames flow correctly in both directions simultaneously"""
     slave_socket_read, master_socket_write = make_pipe()
     master_socket_read, slave_socket_write = make_pipe()

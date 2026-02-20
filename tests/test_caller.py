@@ -27,7 +27,7 @@ def _test_urn(tags: str) -> str:
 
 
 # TEST156: Test creating StdinSource Data variant with byte vector
-def test_stdin_source_data_creation():
+def test_156_stdin_source_data_creation():
     data = bytes([0x48, 0x65, 0x6C, 0x6C, 0x6F])  # "Hello"
     source = StdinSourceData(data)
 
@@ -36,7 +36,7 @@ def test_stdin_source_data_creation():
 
 
 # TEST157: Test creating StdinSource FileReference variant with all required fields
-def test_stdin_source_file_reference_creation():
+def test_157_stdin_source_file_reference_creation():
     tracked_file_id = "tracked-file-123"
     original_path = "/path/to/original.pdf"
     security_bookmark = bytes([0x62, 0x6F, 0x6F, 0x6B])  # "book"
@@ -56,14 +56,14 @@ def test_stdin_source_file_reference_creation():
 
 
 # TEST158: Test StdinSource Data with empty vector stores and retrieves correctly
-def test_stdin_source_data_empty():
+def test_158_stdin_source_data_empty():
     source = StdinSourceData(b"")
     assert source.data == b""
     assert len(source.data) == 0
 
 
 # TEST159: Test StdinSource Data with binary content like PNG header bytes
-def test_stdin_source_data_binary():
+def test_159_stdin_source_data_binary():
     # PNG header bytes
     png_header = bytes([0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A])
     source = StdinSourceData(png_header)
@@ -74,7 +74,7 @@ def test_stdin_source_data_binary():
 
 
 # TEST160: Test StdinSource Data clone creates independent copy with same data
-def test_stdin_source_data_clone():
+def test_160_stdin_source_data_clone():
     original_data = bytes([1, 2, 3, 4, 5])
     source1 = StdinSourceData(original_data)
 
@@ -92,7 +92,7 @@ def test_stdin_source_data_clone():
 
 
 # TEST161: Test StdinSource FileReference clone creates independent copy with same fields
-def test_stdin_source_file_reference_clone():
+def test_161_stdin_source_file_reference_clone():
     source1 = StdinSourceFileReference(
         tracked_file_id="file-123",
         original_path="/path/to/file.pdf",
@@ -112,7 +112,7 @@ def test_stdin_source_file_reference_clone():
 
 
 # TEST162: Test StdinSource Debug format displays variant type and relevant fields
-def test_stdin_source_debug_format():
+def test_162_stdin_source_debug_format():
     # Data variant
     data_source = StdinSourceData(b"test data")
     data_repr = repr(data_source)
@@ -139,7 +139,7 @@ def test_stdin_source_debug_format():
 
 
 # TEST274: Test CapArgumentValue::new stores media_urn and raw byte value
-def test_cap_argument_value_new():
+def test_274_cap_argument_value_new():
     media_urn = "media:model-spec;textable;form=scalar"
     value = b"gpt-4o"
 
@@ -150,7 +150,7 @@ def test_cap_argument_value_new():
 
 
 # TEST275: Test CapArgumentValue::from_str converts string to UTF-8 bytes
-def test_cap_argument_value_from_str():
+def test_275_cap_argument_value_from_str():
     media_urn = MEDIA_STRING
     value_str = "Hello, World!"
 
@@ -162,13 +162,13 @@ def test_cap_argument_value_from_str():
 
 
 # TEST276: Test CapArgumentValue::value_as_str succeeds for UTF-8 data
-def test_cap_argument_value_as_str_success():
+def test_276_cap_argument_value_as_str_success():
     arg = CapArgumentValue(MEDIA_STRING, "test string".encode('utf-8'))
     assert arg.value_as_str() == "test string"
 
 
 # TEST277: Test CapArgumentValue::value_as_str fails for non-UTF-8 binary data
-def test_cap_argument_value_as_str_fails_binary():
+def test_277_cap_argument_value_as_str_fails_binary():
     # Binary data that's not valid UTF-8
     binary_data = bytes([0xFF, 0xFE, 0xFD, 0xFC])
     arg = CapArgumentValue("media:bytes", binary_data)
@@ -178,7 +178,7 @@ def test_cap_argument_value_as_str_fails_binary():
 
 
 # TEST278: Test CapArgumentValue::new with empty value stores empty vec
-def test_cap_argument_value_empty():
+def test_278_cap_argument_value_empty():
     arg = CapArgumentValue(MEDIA_STRING, b"")
     assert arg.value == b""
     assert len(arg.value) == 0
@@ -186,7 +186,7 @@ def test_cap_argument_value_empty():
 
 
 # TEST279: Test CapArgumentValue Clone produces independent copy with same data
-def test_cap_argument_value_clone():
+def test_279_cap_argument_value_clone():
     original = CapArgumentValue.from_str(MEDIA_STRING, "original value")
     cloned = original.clone()
 
@@ -201,7 +201,7 @@ def test_cap_argument_value_clone():
 
 
 # TEST280: Test CapArgumentValue Debug format includes media_urn and value
-def test_cap_argument_value_debug():
+def test_280_cap_argument_value_debug():
     # Text value
     text_arg = CapArgumentValue.from_str(MEDIA_STRING, "test value")
     text_repr = repr(text_arg)
@@ -218,7 +218,7 @@ def test_cap_argument_value_debug():
 
 
 # TEST281: Test CapArgumentValue::new accepts Into<String> for media_urn (String and &str)
-def test_cap_argument_value_media_urn_types():
+def test_281_cap_argument_value_media_urn_types():
     value = b"test"
 
     # String
@@ -231,7 +231,7 @@ def test_cap_argument_value_media_urn_types():
 
 
 # TEST282: Test CapArgumentValue::from_str with Unicode string preserves all characters
-def test_cap_argument_value_unicode():
+def test_282_cap_argument_value_unicode():
     unicode_str = "Hello 世界 🌍"
     arg = CapArgumentValue.from_str(MEDIA_STRING, unicode_str)
 
@@ -241,7 +241,7 @@ def test_cap_argument_value_unicode():
 
 
 # TEST283: Test CapArgumentValue with large binary payload preserves all bytes
-def test_cap_argument_value_large_binary():
+def test_283_cap_argument_value_large_binary():
     # Create a large binary payload (10KB)
     large_data = bytes(range(256)) * 40  # 10,240 bytes
     arg = CapArgumentValue("media:bytes", large_data)

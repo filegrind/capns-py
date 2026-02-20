@@ -16,7 +16,7 @@ def _test_urn(tags: str) -> str:
 
 
 # TEST108: Test Cap creation with URN, title, and command
-def test_cap_creation():
+def test_108_cap_creation():
     urn = CapUrn.from_string(_test_urn("op=extract;target=metadata"))
     cap = Cap(urn, "Extract Metadata", "extract-metadata")
 
@@ -27,7 +27,7 @@ def test_cap_creation():
 
 
 # TEST109: Test Cap with args stores and retrieves arguments correctly
-def test_cap_with_args():
+def test_109_cap_with_args():
     urn = CapUrn.from_string(_test_urn("op=process"))
     cap = Cap(urn, "Process Data", "process-data")
 
@@ -46,7 +46,7 @@ def test_cap_with_args():
 
 
 # TEST110: Test Cap with stdin source stores stdin media URN correctly
-def test_cap_with_stdin():
+def test_110_cap_with_stdin():
     urn = CapUrn.from_string(_test_urn("op=convert"))
     cap = Cap(urn, "Convert", "convert")
 
@@ -62,7 +62,7 @@ def test_cap_with_stdin():
 
 
 # TEST111: Test Cap with no stdin returns None for get_stdin_media_urn
-def test_cap_without_stdin():
+def test_111_cap_without_stdin():
     urn = CapUrn.from_string(_test_urn("op=process"))
     cap = Cap(urn, "Process", "process")
 
@@ -78,7 +78,7 @@ def test_cap_without_stdin():
 
 
 # TEST112: Test Cap with output stores output definition correctly
-def test_cap_with_output():
+def test_112_cap_with_output():
     urn = CapUrn.from_string(_test_urn("op=generate"))
     cap = Cap(urn, "Generate", "generate")
 
@@ -94,7 +94,7 @@ def test_cap_with_output():
 
 
 # TEST113: Test Cap with metadata stores and retrieves metadata correctly
-def test_cap_with_metadata():
+def test_113_cap_with_metadata():
     urn = CapUrn.from_string(_test_urn("op=test"))
     metadata = {"supports_streaming": "true", "version": "2.0"}
     cap = Cap.with_metadata(urn, "Test Cap", "test-cap", metadata)
@@ -107,7 +107,7 @@ def test_cap_with_metadata():
 
 
 # TEST114: Test Cap JSON serialization includes all fields
-def test_cap_json_serialization():
+def test_114_cap_json_serialization():
     urn = CapUrn.from_string(_test_urn("op=process"))
     cap = Cap(urn, "Process", "process-cmd")
     cap.set_description("A processing capability")
@@ -140,7 +140,7 @@ def test_cap_json_serialization():
 
 
 # TEST115: Test Cap JSON deserialization roundtrip preserves all data
-def test_cap_json_roundtrip():
+def test_115_cap_json_roundtrip():
     urn = CapUrn.from_string(_test_urn("op=convert"))
     cap = Cap(urn, "Convert", "convert-cmd")
 
@@ -165,7 +165,7 @@ def test_cap_json_roundtrip():
 
 
 # TEST116: Test CapArg with multiple sources stores all source types
-def test_cap_arg_multiple_sources():
+def test_116_cap_arg_multiple_sources():
     sources = [
         StdinSource("media:bytes"),
         PositionSource(0),

@@ -73,6 +73,7 @@ from capns.urn.cap_urn import (
     CapUrn,
     CapUrnError,
     CapUrnBuilder,
+    CapMatcher,
 )
 
 from capns.urn.cap_matrix import (
@@ -193,6 +194,8 @@ from capns.bifaci.relay import (
 
 # Standard module
 from capns.standard.caps import (
+    CAP_IDENTITY,
+    CAP_DISCARD,
     model_availability_urn,
     model_path_urn,
     llm_conversation_urn,
@@ -264,6 +267,7 @@ __all__ = [
     "CapUrn",
     "CapUrnError",
     "CapUrnBuilder",
+    "CapMatcher",
     # Response
     "ResponseWrapper",
     # Cap
@@ -370,6 +374,8 @@ __all__ = [
     "NoSetsFoundError",
     "InvalidUrnError",
     # Standard caps
+    "CAP_IDENTITY",
+    "CAP_DISCARD",
     "model_availability_urn",
     "model_path_urn",
     "llm_conversation_urn",

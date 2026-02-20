@@ -339,22 +339,22 @@ class MediaUrn:
         return "void" in self._urn.tags
 
     def is_file_path(self) -> bool:
-        """Check if this represents a file path type.
-        Returns true if the "file-path" marker tag is present.
+        """Check if this represents a single file path type (not array).
+        Returns true if the "file-path" marker tag is present AND NOT form=list.
         """
-        return self._urn.tags.get("file-path") == "*"
+        return self._urn.tags.get("file-path") == "*" and not self.is_list()
 
     def is_file_path_array(self) -> bool:
         """Check if this represents a file path array type.
-        Returns true if the "file-path-array" marker tag is present.
+        Returns true if the "file-path" marker tag is present AND form=list.
         """
-        return self._urn.tags.get("file-path-array") == "*"
+        return self._urn.tags.get("file-path") == "*" and self.is_list()
 
     def is_any_file_path(self) -> bool:
         """Check if this represents any file path type (single or array).
-        Returns true if either "file-path" or "file-path-array" marker tag is present.
+        Returns true if the "file-path" marker tag is present.
         """
-        return self.is_file_path() or self.is_file_path_array()
+        return self._urn.tags.get("file-path") == "*"
 
     def is_collection(self) -> bool:
         """Check if this represents a collection type (folder structure).
