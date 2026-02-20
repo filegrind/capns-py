@@ -424,6 +424,42 @@ class CapGraph:
                 current_path.pop()
                 visited.remove(edge.to_spec)
 
+    def find_best_path(
+        self,
+        from_spec: str,
+        to_spec: str,
+        depth_limit: int,
+    ) -> Optional[List[CapGraphEdge]]:
+        """Find the highest-specificity path (not necessarily shortest).
+
+        Explores all paths up to depth_limit and returns the one with the highest
+        total specificity across all edges in the path. If no path exists, returns None.
+        """
+        all_paths = self.find_all_paths(from_spec, to_spec, depth_limit)
+        if not all_paths:
+            return None
+
+        def total_specificity(path: List[CapGraphEdge]) -> int:
+            return sum(e.specificity for e in path)
+
+        return max(all_paths, key=total_specificity)
+
+    def get_input_specs(self) -> Set[str]:
+        """Get all MediaSpec IDs that appear as input (from_spec) in the graph.
+
+        Returns specs that have at least one outgoing edge — these are specs
+        that some capability can accept as input.
+        """
+        return set(edge.from_spec for edge in self.edges)
+
+    def get_output_specs(self) -> Set[str]:
+        """Get all MediaSpec IDs that appear as output (to_spec) in the graph.
+
+        Returns specs that have at least one incoming edge — these are specs
+        that some capability produces as output.
+        """
+        return set(edge.to_spec for edge in self.edges)
+
 
 # ==============================================================================
 # CapMatrix - Registry of CapSet providers
@@ -574,6 +610,15 @@ class CapMatrix:
     def clear(self) -> None:
         """Clear all registered sets"""
         self.sets.clear()
+
+    def iter_hosts_and_caps(self):
+        """Iterate over all registered hosts with their capabilities.
+
+        Yields:
+            Tuple of (host_name, capabilities) for each registered host
+        """
+        for name, entry in self.sets.items():
+            yield (name, entry.capabilities)
 
 
 # ==============================================================================

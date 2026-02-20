@@ -23,7 +23,7 @@ from capns.bifaci.frame import FrameType
 
 
 # TEST235: Test ResponseChunk stores payload, seq, offset, len, and eof fields correctly
-def test_response_chunk():
+def test_235_response_chunk():
     chunk = ResponseChunk(
         payload=b"hello",
         seq=0,
@@ -40,7 +40,7 @@ def test_response_chunk():
 
 
 # TEST236: Test ResponseChunk with all fields populated preserves offset, len, and eof
-def test_response_chunk_with_all_fields():
+def test_236_response_chunk_with_all_fields():
     chunk = ResponseChunk(
         payload=b"data",
         seq=5,
@@ -57,21 +57,21 @@ def test_response_chunk_with_all_fields():
 
 
 # TEST237: Test PluginResponse::Single final_payload returns the single payload slice
-def test_plugin_response_single():
+def test_237_plugin_response_single():
     response = PluginResponse.single(b"result")
     assert response.final_payload() == b"result"
     assert response.concatenated() == b"result"
 
 
 # TEST238: Test PluginResponse::Single with empty payload returns empty slice and empty vec
-def test_plugin_response_single_empty():
+def test_238_plugin_response_single_empty():
     response = PluginResponse.single(b"")
     assert response.final_payload() == b""
     assert response.concatenated() == b""
 
 
 # TEST239: Test PluginResponse::Streaming concatenated joins all chunk payloads in order
-def test_plugin_response_streaming():
+def test_239_plugin_response_streaming():
     chunks = [
         ResponseChunk(
             payload=b"hello",
@@ -106,7 +106,7 @@ def test_plugin_response_streaming():
 
 
 # TEST240: Test PluginResponse::Streaming final_payload returns the last chunk's payload
-def test_plugin_response_streaming_final_payload():
+def test_240_plugin_response_streaming_final_payload():
     chunks = [
         ResponseChunk(
             payload=b"first",
@@ -138,14 +138,14 @@ def test_plugin_response_streaming_final_payload():
 
 
 # TEST241: Test PluginResponse::Streaming with empty chunks vec returns empty concatenation
-def test_plugin_response_streaming_empty():
+def test_241_plugin_response_streaming_empty():
     response = PluginResponse.streaming([])
     assert response.final_payload() is None
     assert response.concatenated() == b""
 
 
 # TEST242: Test PluginResponse::Streaming concatenated capacity is pre-allocated correctly for large payloads
-def test_plugin_response_streaming_large():
+def test_242_plugin_response_streaming_large():
     # Create chunks with substantial data
     chunks = [
         ResponseChunk(
@@ -181,7 +181,7 @@ def test_plugin_response_streaming_large():
 
 
 # TEST243: Test AsyncHostError variants display correct error messages
-def test_async_host_error_variants():
+def test_243_async_host_error_variants():
     # Test PluginError
     err = PluginError("CODE", "message")
     assert err.code == "CODE"
@@ -211,7 +211,7 @@ def test_async_host_error_variants():
 
 
 # TEST244: Test AsyncHostError::from converts CborError to Cbor variant
-def test_async_host_error_from_cbor():
+def test_244_async_host_error_from_cbor():
     # Create a CborError and wrap it
     cbor_msg = "CBOR encoding failed"
     host_err = CborErrorWrapper(cbor_msg)
@@ -219,14 +219,14 @@ def test_async_host_error_from_cbor():
 
 
 # TEST245: Test AsyncHostError::from converts io::Error to Io variant
-def test_async_host_error_from_io():
+def test_245_async_host_error_from_io():
     io_msg = "pipe broken"
     host_err = IoError(io_msg)
     assert io_msg in str(host_err)
 
 
 # TEST246: Test AsyncHostError Clone implementation produces equal values
-def test_async_host_error_equality():
+def test_246_async_host_error_equality():
     # Python doesn't have explicit Clone trait, but we can test equality
     err1 = PluginError("ERR", "msg")
     err2 = PluginError("ERR", "msg")
@@ -237,7 +237,7 @@ def test_async_host_error_equality():
 
 
 # TEST247: Test ResponseChunk Clone produces independent copy with same data
-def test_response_chunk_copy():
+def test_247_response_chunk_copy():
     chunk = ResponseChunk(
         payload=b"data",
         seq=3,
@@ -262,7 +262,7 @@ def test_response_chunk_copy():
 
 
 # TEST316: Test that concatenated() returns full payload while final_payload() returns only last chunk
-def test_concatenated_vs_final_payload_divergence():
+def test_316_concatenated_vs_final_payload_divergence():
     chunks = [
         ResponseChunk(payload=b"AAAA", seq=0, offset=None, len=None, is_eof=False),
         ResponseChunk(payload=b"BBBB", seq=1, offset=None, len=None, is_eof=False),

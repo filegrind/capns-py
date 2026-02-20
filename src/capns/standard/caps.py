@@ -4,7 +4,6 @@ This module provides standard capability URN builders used across
 all MACINA providers. These are the single source of truth for URN construction.
 """
 
-from typing import Optional
 from capns.urn.cap_urn import CapUrn, CapUrnBuilder
 from capns.urn.media_urn import (
     # Primitives
@@ -68,39 +67,6 @@ CAP_DISCARD = "cap:in=media:;out=media:void"
 # =============================================================================
 
 
-def input_media_urn_for_ext(ext: Optional[str]) -> str:
-    """Get the input media URN for a file extension
-
-    Uses PRIMARY type naming where the type IS the format.
-    - Document files (pdf, epub): type=pdf, type=epub
-    - Text format files (md, txt, rst, log): type=md, type=txt, etc.
-    - Generic/unknown: type=binary (fallback)
-    """
-    if ext is None:
-        return MEDIA_BINARY
-
-    ext_lower = ext.lower()
-
-    # Document types (PRIMARY naming)
-    if ext_lower == "pdf":
-        return MEDIA_PDF
-    elif ext_lower == "epub":
-        return MEDIA_EPUB
-    # Text format types (PRIMARY naming)
-    elif ext_lower == "md":
-        return MEDIA_MD
-    elif ext_lower == "txt":
-        return MEDIA_TXT
-    elif ext_lower == "rst":
-        return MEDIA_RST
-    elif ext_lower == "log":
-        return MEDIA_LOG
-    # Generic text
-    elif ext_lower == "text":
-        return MEDIA_STRING
-    # Fallback
-    else:
-        return MEDIA_BINARY
 
 
 # =============================================================================
@@ -295,51 +261,57 @@ def model_path_urn() -> CapUrn:
 # -----------------------------------------------------------------------------
 
 
-def generate_thumbnail_urn(ext: Optional[str] = None) -> CapUrn:
-    """Build URN for generate-thumbnail capability
+def generate_thumbnail_urn(input_media: str = MEDIA_BINARY) -> CapUrn:
+    """Build URN for generate-thumbnail capability.
 
-    If ext is provided, builds a URN with appropriate input type for that extension.
-    If ext is None, builds a generic fallback URN that matches binary files.
+    input_media is the media URN for the input type (e.g., MEDIA_PDF, MEDIA_BINARY).
     """
-    input_spec = input_media_urn_for_ext(ext)
-
     return (
         CapUrnBuilder()
         .tag("op", "generate_thumbnail")
-        .in_spec(input_spec)
+        .in_spec(input_media)
         .out_spec(MEDIA_IMAGE_THUMBNAIL)
         .build()
     )
 
 
-def disbind_urn(ext: Optional[str] = None) -> CapUrn:
-    """Build URN for disbind capability"""
+def disbind_urn(input_media: str = MEDIA_BINARY) -> CapUrn:
+    """Build URN for disbind capability.
+
+    input_media is the media URN for the input type (e.g., MEDIA_PDF, MEDIA_TXT).
+    """
     return (
         CapUrnBuilder()
         .tag("op", "disbind")
-        .in_spec(input_media_urn_for_ext(ext))
+        .in_spec(input_media)
         .out_spec(MEDIA_DISBOUND_PAGE)
         .build()
     )
 
 
-def extract_metadata_urn(ext: Optional[str] = None) -> CapUrn:
-    """Build URN for extract-metadata capability"""
+def extract_metadata_urn(input_media: str = MEDIA_BINARY) -> CapUrn:
+    """Build URN for extract-metadata capability.
+
+    input_media is the media URN for the input type (e.g., MEDIA_PDF, MEDIA_TXT).
+    """
     return (
         CapUrnBuilder()
         .tag("op", "extract_metadata")
-        .in_spec(input_media_urn_for_ext(ext))
+        .in_spec(input_media)
         .out_spec(MEDIA_FILE_METADATA)
         .build()
     )
 
 
-def extract_outline_urn(ext: Optional[str] = None) -> CapUrn:
-    """Build URN for extract-outline capability"""
+def extract_outline_urn(input_media: str = MEDIA_BINARY) -> CapUrn:
+    """Build URN for extract-outline capability.
+
+    input_media is the media URN for the input type (e.g., MEDIA_PDF, MEDIA_TXT).
+    """
     return (
         CapUrnBuilder()
         .tag("op", "extract_outline")
-        .in_spec(input_media_urn_for_ext(ext))
+        .in_spec(input_media)
         .out_spec(MEDIA_DOCUMENT_OUTLINE)
         .build()
     )

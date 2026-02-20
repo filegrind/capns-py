@@ -28,7 +28,7 @@ def _test_urn(tags: str) -> str:
 
 
 # TEST135: Test registry creation with temporary cache directory succeeds
-def test_registry_creation():
+def test_135_registry_creation():
     """Test registry creation with custom cache directory"""
     with tempfile.TemporaryDirectory() as temp_dir:
         cache_dir = Path(temp_dir)
@@ -40,7 +40,7 @@ def test_registry_creation():
 
 
 # TEST136: Test cache key generation produces consistent hashes for same URN
-def test_cache_key_generation():
+def test_136_cache_key_generation():
     """Test cache key generation produces consistent SHA-256 hashes"""
     registry = CapRegistry.new_for_test()
 
@@ -65,7 +65,7 @@ def test_cache_key_generation():
 
 
 # TEST137: Test parsing registry JSON without stdin args verifies cap structure
-def test_parse_registry_json():
+def test_137_parse_registry_json():
     """Test parsing cap JSON without stdin args"""
     # JSON without stdin args - means cap doesn't accept stdin
     json_str = '''{
@@ -110,7 +110,7 @@ def test_parse_registry_json():
 
 
 # TEST138: Test parsing registry JSON with stdin args verifies stdin media URN extraction
-def test_parse_registry_json_with_stdin():
+def test_138_parse_registry_json_with_stdin():
     """Test parsing cap JSON with stdin args"""
     json_str = '''{
         "urn": "cap:in=\\"media:pdf;bytes\\";op=extract_metadata;out=\\"media:file-metadata;textable;form=map\\"",
@@ -133,7 +133,7 @@ def test_parse_registry_json_with_stdin():
 
 
 # TEST139: Test URL construction keeps cap prefix literal and only encodes tags part
-def test_url_keeps_cap_prefix_literal():
+def test_139_url_keeps_cap_prefix_literal():
     """Test that URL keeps 'cap:' literal, not encoded as 'cap%3A'"""
     from urllib.parse import quote as url_encode
 
@@ -150,7 +150,7 @@ def test_url_keeps_cap_prefix_literal():
 
 
 # TEST140: Test URL encodes media URNs with proper percent encoding for special characters
-def test_url_encodes_quoted_media_urns():
+def test_140_url_encodes_quoted_media_urns():
     """Test that special characters in URNs are percent-encoded"""
     from urllib.parse import quote as url_encode
 
@@ -170,7 +170,7 @@ def test_url_encodes_quoted_media_urns():
 
 
 # TEST141: Test exact URL format contains properly encoded media URN components
-def test_exact_url_format():
+def test_141_exact_url_format():
     """Test exact URL format for registry requests"""
     from urllib.parse import quote as url_encode
 
@@ -187,7 +187,7 @@ def test_exact_url_format():
 
 
 # TEST142: Test normalize handles different tag orders producing same canonical form
-def test_normalize_handles_different_tag_orders():
+def test_142_normalize_handles_different_tag_orders():
     """Test that different tag orders normalize to same form"""
     # Different tag orders should normalize to the same canonical form
     urn1 = 'cap:op=test;in="media:string";out="media:object"'
@@ -200,7 +200,7 @@ def test_normalize_handles_different_tag_orders():
 
 
 # TEST143: Test default config uses capns.org or environment variable values
-def test_default_config():
+def test_143_default_config():
     """Test default configuration"""
     config = RegistryConfig()
 
@@ -210,7 +210,7 @@ def test_default_config():
 
 
 # TEST144: Test custom registry URL updates both registry and schema base URLs
-def test_custom_registry_url():
+def test_144_custom_registry_url():
     """Test setting custom registry URL"""
     config = RegistryConfig().with_registry_url("https://localhost:8888")
 
@@ -219,7 +219,7 @@ def test_custom_registry_url():
 
 
 # TEST145: Test custom registry and schema URLs set independently
-def test_custom_registry_and_schema_url():
+def test_145_custom_registry_and_schema_url():
     """Test setting both registry and schema URLs independently"""
     config = (RegistryConfig()
               .with_registry_url("https://localhost:8888")
@@ -230,7 +230,7 @@ def test_custom_registry_and_schema_url():
 
 
 # TEST146: Test schema URL not overwritten when set explicitly before registry URL
-def test_schema_url_not_overwritten_when_explicit():
+def test_146_schema_url_not_overwritten_when_explicit():
     """Test that explicitly set schema URL is not overwritten"""
     # If schema URL is set explicitly first, changing registry URL shouldn't change it
     config = (RegistryConfig()
@@ -242,7 +242,7 @@ def test_schema_url_not_overwritten_when_explicit():
 
 
 # TEST147: Test registry for test with custom config creates registry with specified URLs
-def test_registry_for_test_with_config():
+def test_147_registry_for_test_with_config():
     """Test creating test registry with custom configuration"""
     config = RegistryConfig().with_registry_url("https://test-registry.local")
     registry = CapRegistry.new_for_test_with_config(config)

@@ -36,7 +36,7 @@ def make_cap(urn_str: str, title: str, output_media: str = MEDIA_STRING) -> Cap:
 
 
 # TEST117: Test registering cap set and finding by exact and subset matching
-def test_register_and_find_cap_set():
+def test_117_register_and_find_cap_set():
     registry = CapMatrix()
 
     host = MockCapSet("test-host")
@@ -59,7 +59,7 @@ def test_register_and_find_cap_set():
 
 
 # TEST118: Test selecting best cap set based on specificity ranking
-def test_best_cap_set_selection():
+def test_118_best_cap_set_selection():
     registry = CapMatrix()
 
     # Register general host
@@ -86,7 +86,7 @@ def test_best_cap_set_selection():
 
 
 # TEST119: Test invalid URN returns InvalidUrn error
-def test_invalid_urn_handling():
+def test_119_invalid_urn_handling():
     registry = CapMatrix()
 
     with pytest.raises(InvalidUrnError):
@@ -94,7 +94,7 @@ def test_invalid_urn_handling():
 
 
 # TEST120: Test accepts_request checks if registry can accept a capability request
-def test_accepts_request():
+def test_120_accepts_request():
     registry = CapMatrix()
 
     host = MockCapSet("test-host")
@@ -117,7 +117,7 @@ def test_accepts_request():
 
 
 # TEST127: Test CapGraph adds nodes and edges from capability definitions
-def test_cap_graph_adds_nodes_and_edges():
+def test_127_cap_graph_adds_nodes_and_edges():
     graph = CapGraph()
 
     cap1 = make_cap('cap:in="media:binary";op=decode;out="media:string"', "Binary to String", MEDIA_STRING)
@@ -142,7 +142,7 @@ def test_cap_graph_adds_nodes_and_edges():
 
 
 # TEST128: Test CapGraph tracks outgoing and incoming edges for spec conversions
-def test_cap_graph_tracks_outgoing_and_incoming():
+def test_128_cap_graph_tracks_outgoing_and_incoming():
     graph = CapGraph()
 
     cap1 = make_cap('cap:in="media:binary";op=decode;out="media:string"', "Binary to String", MEDIA_STRING)
@@ -163,7 +163,7 @@ def test_cap_graph_tracks_outgoing_and_incoming():
 
 
 # TEST129: Test CapGraph detects direct and indirect conversion paths between specs
-def test_cap_graph_detects_conversion_paths():
+def test_129_cap_graph_detects_conversion_paths():
     graph = CapGraph()
 
     # Create conversion chain: binary -> string -> json
@@ -190,7 +190,7 @@ def test_cap_graph_detects_conversion_paths():
 
 
 # TEST130: Test CapGraph finds shortest path for spec conversion chain
-def test_cap_graph_finds_shortest_path():
+def test_130_cap_graph_finds_shortest_path():
     graph = CapGraph()
 
     # Create conversion chain: binary -> string -> json
@@ -212,7 +212,7 @@ def test_cap_graph_finds_shortest_path():
 
 
 # TEST131: Test CapGraph finds all conversion paths sorted by length
-def test_cap_graph_finds_all_paths():
+def test_131_cap_graph_finds_all_paths():
     graph = CapGraph()
 
     # Create multiple paths: binary -> string -> json
@@ -236,7 +236,7 @@ def test_cap_graph_finds_all_paths():
 
 
 # TEST132: Test CapGraph returns direct edges sorted by specificity
-def test_cap_graph_direct_edges_sorted_by_specificity():
+def test_132_cap_graph_direct_edges_sorted_by_specificity():
     graph = CapGraph()
 
     # General capability
@@ -258,7 +258,7 @@ def test_cap_graph_direct_edges_sorted_by_specificity():
 
 
 # TEST134: Test CapGraph stats provides counts of nodes and edges
-def test_cap_graph_stats():
+def test_134_cap_graph_stats():
     graph = CapGraph()
 
     cap1 = make_cap('cap:in="media:binary";op=decode;out="media:string"', "Binary to String", MEDIA_STRING)
@@ -279,7 +279,9 @@ def test_cap_graph_stats():
 
 # Additional tests for CapMatrix methods
 
-def test_cap_matrix_get_host_names():
+
+# TEST576: CapBlock::get_registry_names returns names in insertion order
+def test_576_cap_matrix_get_host_names():
     registry = CapMatrix()
 
     host1 = MockCapSet("host1")
@@ -297,7 +299,8 @@ def test_cap_matrix_get_host_names():
     assert "host2" in names
 
 
-def test_cap_matrix_get_all_capabilities():
+# TEST571: get_all_capabilities returns caps from all hosts
+def test_571_cap_matrix_get_all_capabilities():
     registry = CapMatrix()
 
     host = MockCapSet("host")
@@ -311,7 +314,8 @@ def test_cap_matrix_get_all_capabilities():
     assert len(caps) == 2
 
 
-def test_cap_matrix_get_capabilities_for_host():
+# TEST572: get_capabilities_for_host returns caps for specific host, None for unknown
+def test_572_cap_matrix_get_capabilities_for_host():
     registry = CapMatrix()
 
     host = MockCapSet("host")
@@ -330,7 +334,8 @@ def test_cap_matrix_get_capabilities_for_host():
     assert caps is None
 
 
-def test_cap_matrix_unregister_cap_set():
+# TEST569: unregister_cap_set removes a host and returns true, false if not found
+def test_569_cap_matrix_unregister_cap_set():
     registry = CapMatrix()
 
     host = MockCapSet("host")
@@ -346,7 +351,8 @@ def test_cap_matrix_unregister_cap_set():
     assert registry.unregister_cap_set("nonexistent") == False
 
 
-def test_cap_matrix_clear():
+# TEST570: clear removes all registered sets
+def test_570_cap_matrix_clear():
     registry = CapMatrix()
 
     host1 = MockCapSet("host1")
@@ -371,7 +377,7 @@ def test_cap_matrix_clear():
 
 
 # TEST121: Test CapBlock selects more specific cap over less specific regardless of registry order
-def test_cap_block_more_specific_wins():
+def test_121_cap_block_more_specific_wins():
     # This is the key test: provider has less specific cap, plugin has more specific
     # The more specific one should win regardless of registry order
 
@@ -412,7 +418,7 @@ def test_cap_block_more_specific_wins():
 
 
 # TEST122: Test CapBlock breaks specificity ties by first registered registry
-def test_cap_block_tie_goes_to_first():
+def test_122_cap_block_tie_goes_to_first():
     # When specificity is equal, first registry wins
 
     registry1 = CapMatrix()
@@ -439,7 +445,7 @@ def test_cap_block_tie_goes_to_first():
 
 
 # TEST123: Test CapBlock polls all registries to find most specific match
-def test_cap_block_polls_all():
+def test_123_cap_block_polls_all():
     # Test that all registries are polled
 
     registry1 = CapMatrix()
@@ -473,7 +479,7 @@ def test_cap_block_polls_all():
 
 
 # TEST124: Test CapBlock returns error when no registries match the request
-def test_cap_block_no_match():
+def test_124_cap_block_no_match():
     registry = CapMatrix()
 
     composite = CapBlock()
@@ -487,7 +493,7 @@ def test_cap_block_no_match():
 
 
 # TEST125: Test CapBlock prefers specific plugin over generic provider fallback
-def test_cap_block_fallback_scenario():
+def test_125_cap_block_fallback_scenario():
     # Test the exact scenario from the user's issue:
     # Provider: generic fallback (can handle any file type)
     # Plugin:   PDF-specific handler
@@ -527,7 +533,7 @@ def test_cap_block_fallback_scenario():
 
 
 # TEST126: Test CapBlock accepts_request method checks if any registry can accept the capability
-def test_cap_block_accepts_request():
+def test_126_cap_block_accepts_request():
     # Test the accepts_request() method
 
     provider_registry = CapMatrix()
@@ -548,7 +554,7 @@ def test_cap_block_accepts_request():
 
 
 # TEST133: Test CapBlock graph integration with multiple registries and conversion paths
-def test_cap_block_graph_integration():
+def test_133_cap_block_graph_integration():
     # Test that CapBlock.graph() works correctly
 
     provider_registry = CapMatrix()
@@ -595,3 +601,128 @@ def test_cap_block_graph_integration():
     edge_pairs = [(e.from_spec, e.to_spec) for e in edges]
     assert any('bytes' in from_spec and ('scalar' in to_spec or 'textable' in to_spec) for from_spec, to_spec in edge_pairs)
     assert any(('scalar' in from_spec or 'textable' in from_spec) and 'map' in to_spec for from_spec, to_spec in edge_pairs)
+
+
+# TEST574: CapBlock::remove_registry removes by name, returns the registry object; None for missing
+def test_574_cap_block_remove_registry():
+    registry1 = CapMatrix()
+    registry2 = CapMatrix()
+
+    host1 = MockCapSet("host1")
+    cap1 = make_cap(make_test_urn("op=test1"), "Test 1")
+    registry1.register_cap_set("host1", host1, [cap1])
+
+    composite = CapBlock()
+    composite.add_registry("first", registry1)
+    composite.add_registry("second", registry2)
+
+    assert len(composite.get_registry_names()) == 2
+
+    # Remove existing
+    removed = composite.remove_registry("first")
+    assert removed is not None, "remove_registry must return the registry for existing name"
+    assert len(composite.get_registry_names()) == 1
+    assert "first" not in composite.get_registry_names()
+
+    # Removing non-existent returns None
+    assert composite.remove_registry("nonexistent") is None
+
+
+# TEST575: CapBlock::get_registry returns registry by name, None for unknown
+def test_575_cap_block_get_registry():
+    registry = CapMatrix()
+
+    composite = CapBlock()
+    composite.add_registry("alpha", registry)
+
+    retrieved = composite.get_registry("alpha")
+    assert retrieved is not None, "get_registry must return the registry for existing name"
+
+    assert composite.get_registry("nonexistent") is None
+
+
+# TEST568: CapGraph::find_best_path returns highest-specificity path over shortest
+def test_568_cap_graph_find_best_path():
+    from capns.urn.cap_matrix import CapGraph
+    graph = CapGraph()
+
+    # Direct path: binary -> obj (low specificity, just op)
+    cap_direct = make_cap(
+        'cap:in="media:binary";op=direct;out="media:object"',
+        "Direct Low Spec",
+        "media:object",
+    )
+
+    # Two-hop path: binary -> string -> obj (high specificity, ext=pdf on first hop)
+    cap_hop1 = make_cap(
+        'cap:ext=pdf;in="media:binary";op=extract;out="media:string"',
+        "Hop1 High Spec",
+        "media:string",
+    )
+    cap_hop2 = make_cap(
+        'cap:ext=json;in="media:string";op=parse;out="media:object"',
+        "Hop2 High Spec",
+        "media:object",
+    )
+
+    graph.add_cap(cap_direct, "r1")
+    graph.add_cap(cap_hop1, "r2")
+    graph.add_cap(cap_hop2, "r2")
+
+    # find_path returns shortest (1 hop)
+    shortest = graph.find_path("media:binary", "media:object")
+    assert shortest is not None
+    assert len(shortest) == 1
+
+    # find_best_path returns highest total specificity (2 hops, each with ext tag)
+    best = graph.find_best_path("media:binary", "media:object", 5)
+    assert best is not None
+    total_spec = sum(e.specificity for e in best)
+    direct_spec = shortest[0].specificity
+    assert total_spec > direct_spec, (
+        f"Best path total specificity {total_spec} must exceed direct path {direct_spec}"
+    )
+    assert len(best) == 2
+
+
+# TEST573: iter_hosts_and_caps iterates all hosts with their capabilities
+def test_573_cap_matrix_iter_hosts_and_caps():
+    registry = CapMatrix()
+
+    host1 = MockCapSet("h1")
+    host2 = MockCapSet("h2")
+    cap_a = make_cap(make_test_urn("op=a"), "Cap A")
+    cap_b = make_cap(make_test_urn("op=b"), "Cap B")
+
+    registry.register_cap_set("h1", host1, [cap_a])
+    registry.register_cap_set("h2", host2, [cap_b])
+
+    entries = list(registry.iter_hosts_and_caps())
+    assert len(entries) == 2
+    for name, caps in entries:
+        assert name in ("h1", "h2")
+        assert len(caps) == 1
+
+
+# TEST577: CapGraph::get_input_specs and get_output_specs return correct sets
+def test_577_cap_graph_input_output_specs():
+    from capns.urn.cap_matrix import CapGraph
+    graph = CapGraph()
+
+    cap = make_cap(
+        'cap:in="media:binary";op=x;out="media:string"',
+        "X",
+        "media:string",
+    )
+    graph.add_cap(cap, "r")
+
+    inputs = graph.get_input_specs()
+    assert "media:binary" in inputs, "binary should be an input spec"
+
+    outputs = graph.get_output_specs()
+    assert "media:string" in outputs, "string should be an output spec"
+
+    # binary is only an input (no edges pointing TO it)
+    assert "media:binary" not in outputs
+    # string is only an output (no edges FROM it)
+    assert "media:string" not in inputs

@@ -48,7 +48,7 @@ def plugin_handshake_worker(plugin_read_sock, plugin_write_sock, manifest):
 
 
 # TEST284: Handshake exchanges HELLO frames, negotiates limits
-def test_handshake_host_plugin():
+def test_284_handshake_host_plugin():
     """Test HELLO frame exchange and limit negotiation"""
     host_write_sock, plugin_read_sock = create_socket_pair()
     plugin_write_sock, host_read_sock = create_socket_pair()
@@ -83,7 +83,7 @@ def test_handshake_host_plugin():
 
 
 # TEST285: Simple request-response flow (REQ → END with payload)
-def test_request_response_simple():
+def test_285_request_response_simple():
     """Test simple REQ → END with payload"""
     host_write_sock, plugin_read_sock = create_socket_pair()
     plugin_write_sock, host_read_sock = create_socket_pair()
@@ -123,7 +123,7 @@ def test_request_response_simple():
 
 
 # TEST286: Streaming response with multiple CHUNK frames
-def test_streaming_chunks():
+def test_286_streaming_chunks():
     """Test streaming response with multiple CHUNK frames"""
     host_write_sock, plugin_read_sock = create_socket_pair()
     plugin_write_sock, host_read_sock = create_socket_pair()
@@ -175,7 +175,7 @@ def test_streaming_chunks():
 
 
 # TEST287: Host-initiated heartbeat handling
-def test_heartbeat_from_host():
+def test_287_heartbeat_from_host():
     """Test host-initiated heartbeat"""
     host_write_sock, plugin_read_sock = create_socket_pair()
     plugin_write_sock, host_read_sock = create_socket_pair()
@@ -213,7 +213,7 @@ def test_heartbeat_from_host():
 
 
 # TEST290: Limit negotiation picks minimum values
-def test_limits_negotiation():
+def test_290_limits_negotiation():
     """Test limit negotiation picks minimum of both sides"""
     host_write_sock, plugin_read_sock = create_socket_pair()
     plugin_write_sock, host_read_sock = create_socket_pair()
@@ -245,7 +245,7 @@ def test_limits_negotiation():
 
 
 # TEST291: Binary payload roundtrip (all 256 byte values)
-def test_binary_payload_roundtrip():
+def test_291_binary_payload_roundtrip():
     """Test binary data integrity through all 256 byte values"""
     host_write_sock, plugin_read_sock = create_socket_pair()
     plugin_write_sock, host_read_sock = create_socket_pair()
@@ -290,7 +290,7 @@ def test_binary_payload_roundtrip():
 
 
 # TEST292: Sequential requests get distinct MessageIds
-def test_message_id_uniqueness():
+def test_292_message_id_uniqueness():
     """Test sequential requests produce unique MessageIds"""
     host_write_sock, plugin_read_sock = create_socket_pair()
     plugin_write_sock, host_read_sock = create_socket_pair()
@@ -331,7 +331,7 @@ def test_message_id_uniqueness():
 
 
 # TEST299: Empty payload request/response roundtrip
-def test_empty_payload_roundtrip():
+def test_299_empty_payload_roundtrip():
     """Test empty payload roundtrip"""
     host_write_sock, plugin_read_sock = create_socket_pair()
     plugin_write_sock, host_read_sock = create_socket_pair()

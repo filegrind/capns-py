@@ -23,7 +23,6 @@ from capns.standard.caps import (
     structured_query_urn,
     bit_choice_urn,
     bit_choices_urn,
-    input_media_urn_for_ext,
 )
 
 __all__ = [
@@ -49,5 +48,4 @@ __all__ = [
     "structured_query_urn",
     "bit_choice_urn",
     "bit_choices_urn",
-    "input_media_urn_for_ext",
 ]

@@ -43,7 +43,7 @@ def create_media_specs(specs):
 
 # TEST088: Test resolving string media URN from registry returns correct media type and profile
 @pytest.mark.asyncio
-async def test_resolve_from_registry_str():
+async def test_088_resolve_from_registry_str():
     registry = await create_test_registry()
     resolved = await resolve_media_urn("media:textable;form=scalar", None, registry)
     assert resolved.media_type == "text/plain"
@@ -53,7 +53,7 @@ async def test_resolve_from_registry_str():
 
 # TEST089: Test resolving object media URN from registry returns JSON media type
 @pytest.mark.asyncio
-async def test_resolve_from_registry_obj():
+async def test_089_resolve_from_registry_obj():
     registry = await create_test_registry()
     resolved = await resolve_media_urn("media:form=map;textable", None, registry)
     assert resolved.media_type == "application/json"
@@ -61,7 +61,7 @@ async def test_resolve_from_registry_obj():
 
 # TEST090: Test resolving binary media URN from registry returns octet-stream and is_binary true
 @pytest.mark.asyncio
-async def test_resolve_from_registry_binary():
+async def test_090_resolve_from_registry_binary():
     registry = await create_test_registry()
     resolved = await resolve_media_urn("media:bytes", None, registry)
     assert resolved.media_type == "application/octet-stream"
@@ -70,7 +70,7 @@ async def test_resolve_from_registry_binary():
 
 # TEST091: Test resolving custom media URN from local media_specs takes precedence over registry
 @pytest.mark.asyncio
-async def test_resolve_custom_media_spec():
+async def test_091_resolve_custom_media_spec():
     registry = await create_test_registry()
     media_specs = create_media_specs([
         MediaSpecDef(
@@ -96,7 +96,7 @@ async def test_resolve_custom_media_spec():
 
 # TEST092: Test resolving custom object form media spec with schema from local media_specs
 @pytest.mark.asyncio
-async def test_resolve_custom_with_schema():
+async def test_092_resolve_custom_with_schema():
     registry = await create_test_registry()
     schema = {
         "type": "object",
@@ -127,7 +127,7 @@ async def test_resolve_custom_with_schema():
 
 # TEST093: Test resolving unknown media URN fails with UnresolvableMediaUrn error
 @pytest.mark.asyncio
-async def test_resolve_unresolvable_fails_hard():
+async def test_093_resolve_unresolvable_fails_hard():
     registry = await create_test_registry()
     # URN not in local media_specs and not in registry
     with pytest.raises(UnresolvableMediaUrn) as exc_info:
@@ -137,7 +137,7 @@ async def test_resolve_unresolvable_fails_hard():
 
 # TEST094: Test local media_specs definition overrides registry definition for same URN
 @pytest.mark.asyncio
-async def test_local_overrides_registry():
+async def test_094_local_overrides_registry():
     registry = await create_test_registry()
     # Custom definition in media_specs takes precedence over registry
     media_specs = create_media_specs([
@@ -166,7 +166,7 @@ async def test_local_overrides_registry():
 
 
 # TEST095: Test MediaSpecDef serializes with required fields and skips None fields
-def test_media_spec_def_serialize():
+def test_095_media_spec_def_serialize():
     spec_def = MediaSpecDef(
         urn="media:test;json",
         media_type="application/json",
@@ -190,7 +190,7 @@ def test_media_spec_def_serialize():
 
 
 # TEST096: Test deserializing MediaSpecDef from JSON object
-def test_media_spec_def_deserialize():
+def test_096_media_spec_def_deserialize():
     data = {
         "urn": "media:test;json",
         "media_type": "application/json",
@@ -209,7 +209,7 @@ def test_media_spec_def_deserialize():
 
 
 # TEST097: Test duplicate URN validation catches duplicates
-def test_validate_no_duplicate_urns_catches_duplicates():
+def test_097_validate_no_duplicate_urns_catches_duplicates():
     media_specs = [
         MediaSpecDef(
             urn="media:dup;json",
@@ -228,7 +228,7 @@ def test_validate_no_duplicate_urns_catches_duplicates():
 
 
 # TEST098: Test duplicate URN validation passes for unique URNs
-def test_validate_no_duplicate_urns_passes_for_unique():
+def test_098_validate_no_duplicate_urns_passes_for_unique():
     media_specs = [
         MediaSpecDef(
             urn="media:first;json",
@@ -251,7 +251,7 @@ def test_validate_no_duplicate_urns_passes_for_unique():
 
 
 # TEST099: Test ResolvedMediaSpec is_binary returns true for bytes media URN
-def test_resolved_is_binary():
+def test_099_resolved_is_binary():
     resolved = ResolvedMediaSpec(
         media_urn="media:bytes",
         media_type="application/octet-stream",
@@ -269,7 +269,7 @@ def test_resolved_is_binary():
 
 
 # TEST100: Test ResolvedMediaSpec is_map returns true for form=map media URN
-def test_resolved_is_map():
+def test_100_resolved_is_map():
     resolved = ResolvedMediaSpec(
         media_urn="media:textable;form=map",
         media_type="application/json",
@@ -288,7 +288,7 @@ def test_resolved_is_map():
 
 
 # TEST101: Test ResolvedMediaSpec is_scalar returns true for form=scalar media URN
-def test_resolved_is_scalar():
+def test_101_resolved_is_scalar():
     resolved = ResolvedMediaSpec(
         media_urn="media:textable;form=scalar",
         media_type="text/plain",
@@ -306,7 +306,7 @@ def test_resolved_is_scalar():
 
 
 # TEST102: Test ResolvedMediaSpec is_list returns true for form=list media URN
-def test_resolved_is_list():
+def test_102_resolved_is_list():
     resolved = ResolvedMediaSpec(
         media_urn="media:textable;form=list",
         media_type="application/json",
@@ -324,7 +324,7 @@ def test_resolved_is_list():
 
 
 # TEST103: Test ResolvedMediaSpec is_json returns true when json tag is present
-def test_resolved_is_json():
+def test_103_resolved_is_json():
     resolved = ResolvedMediaSpec(
         media_urn="media:json;textable;form=map",
         media_type="application/json",
@@ -342,7 +342,7 @@ def test_resolved_is_json():
 
 
 # TEST104: Test ResolvedMediaSpec is_text returns true when textable tag is present
-def test_resolved_is_text():
+def test_104_resolved_is_text():
     resolved = ResolvedMediaSpec(
         media_urn="media:textable",
         media_type="text/plain",
@@ -366,7 +366,7 @@ def test_resolved_is_text():
 
 # TEST105: Test metadata propagates from media spec def to resolved media spec
 @pytest.mark.asyncio
-async def test_metadata_propagation():
+async def test_105_metadata_propagation():
     registry = await create_test_registry()
     media_specs = create_media_specs([
         MediaSpecDef(
@@ -393,7 +393,7 @@ async def test_metadata_propagation():
 
 # TEST106: Test metadata and validation can coexist in media spec definition
 @pytest.mark.asyncio
-async def test_metadata_with_validation():
+async def test_106_metadata_with_validation():
     registry = await create_test_registry()
     media_specs = create_media_specs([
         MediaSpecDef(
@@ -438,7 +438,7 @@ async def test_metadata_with_validation():
 
 # TEST107: Test extensions field propagates from media spec def to resolved
 @pytest.mark.asyncio
-async def test_extensions_propagation():
+async def test_107_extensions_propagation():
     registry = await create_test_registry()
     media_specs = create_media_specs([
         MediaSpecDef(
@@ -459,7 +459,7 @@ async def test_extensions_propagation():
 
 
 # TEST108: Test extensions serializes/deserializes correctly in MediaSpecDef
-def test_extensions_serialization():
+def test_108_extensions_serialization():
     spec_def = MediaSpecDef(
         urn="media:json-data",
         media_type="application/json",
@@ -481,7 +481,7 @@ def test_extensions_serialization():
 
 # TEST109: Test extensions can coexist with metadata and validation
 @pytest.mark.asyncio
-async def test_extensions_with_metadata_and_validation():
+async def test_109_extensions_with_metadata_and_validation():
     registry = await create_test_registry()
     media_specs = create_media_specs([
         MediaSpecDef(
@@ -514,7 +514,7 @@ async def test_extensions_with_metadata_and_validation():
 
 # TEST110: Test multiple extensions in a media spec
 @pytest.mark.asyncio
-async def test_multiple_extensions():
+async def test_110_multiple_extensions():
     registry = await create_test_registry()
     media_specs = create_media_specs([
         MediaSpecDef(

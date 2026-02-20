@@ -17,7 +17,7 @@ def _test_urn(tags: str) -> str:
 
 
 # TEST148: Test creating cap manifest with name, version, description, and caps
-def test_cap_manifest_creation():
+def test_148_cap_manifest_creation():
     urn = CapUrn.from_string(_test_urn("op=extract;target=metadata"))
     cap = Cap(urn, "Extract Metadata", "extract-metadata")
 
@@ -36,7 +36,7 @@ def test_cap_manifest_creation():
 
 
 # TEST149: Test cap manifest with author field sets author correctly
-def test_cap_manifest_with_author():
+def test_149_cap_manifest_with_author():
     urn = CapUrn.from_string(_test_urn("op=extract;target=metadata"))
     cap = Cap(urn, "Extract Metadata", "extract-metadata")
 
@@ -51,7 +51,7 @@ def test_cap_manifest_with_author():
 
 
 # TEST150: Test cap manifest JSON serialization and deserialization roundtrip
-def test_cap_manifest_json_serialization():
+def test_150_cap_manifest_json_serialization():
     urn = CapUrn.from_string(_test_urn("op=extract;target=metadata"))
     cap = Cap(urn, "Extract Metadata", "extract-metadata")
 
@@ -88,7 +88,7 @@ def test_cap_manifest_json_serialization():
 
 
 # TEST151: Test cap manifest deserialization fails when required fields are missing
-def test_cap_manifest_required_fields():
+def test_151_cap_manifest_required_fields():
     # Test that deserialization fails when required fields are missing
     invalid_json = '{"name": "TestComponent"}'
     with pytest.raises((KeyError, json.JSONDecodeError, TypeError)):
@@ -100,7 +100,7 @@ def test_cap_manifest_required_fields():
 
 
 # TEST152: Test cap manifest with multiple caps stores and retrieves all capabilities
-def test_cap_manifest_with_multiple_caps():
+def test_152_cap_manifest_with_multiple_caps():
     id1 = CapUrn.from_string(_test_urn("op=extract;target=metadata"))
     cap1 = Cap(id1, "Extract Metadata", "extract-metadata")
 
@@ -125,7 +125,7 @@ def test_cap_manifest_with_multiple_caps():
 
 
 # TEST153: Test cap manifest with page_url field sets page URL correctly
-def test_cap_manifest_with_page_url():
+def test_153_cap_manifest_with_page_url():
     urn = CapUrn.from_string(_test_urn("op=test"))
     cap = Cap(urn, "Test", "test")
 
@@ -140,7 +140,7 @@ def test_cap_manifest_with_page_url():
 
 
 # TEST154: Test cap manifest JSON includes optional fields only when set
-def test_cap_manifest_optional_fields():
+def test_154_cap_manifest_optional_fields():
     urn = CapUrn.from_string(_test_urn("op=test"))
     cap = Cap(urn, "Test", "test")
 
@@ -164,7 +164,7 @@ def test_cap_manifest_optional_fields():
 
 
 # TEST155: Test cap manifest roundtrip preserves all data including nested cap structures
-def test_cap_manifest_complex_roundtrip():
+def test_155_cap_manifest_complex_roundtrip():
     urn = CapUrn.from_string(_test_urn("op=process"))
     cap = Cap(urn, "Process", "process")
     cap.set_description("A processing capability")

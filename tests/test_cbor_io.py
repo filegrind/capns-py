@@ -32,7 +32,7 @@ from capns.bifaci.frame import (
 
 
 # TEST205: Test encode_frame produces CBOR with integer keys
-def test_encode_frame_produces_cbor_with_integer_keys():
+def test_205_encode_frame_produces_cbor_with_integer_keys():
     frame = Frame.hello(1024, 512)
     data = encode_frame(frame)
 
@@ -50,7 +50,7 @@ def test_encode_frame_produces_cbor_with_integer_keys():
 
 
 # TEST206: Test decode_frame parses CBOR frame correctly
-def test_decode_frame_parses_cbor_correctly():
+def test_206_decode_frame_parses_cbor_correctly():
     original = Frame.hello(2048, 1024)
     data = encode_frame(original)
 
@@ -62,13 +62,13 @@ def test_decode_frame_parses_cbor_correctly():
 
 
 # TEST207: Test decode_frame fails on invalid CBOR
-def test_decode_frame_fails_on_invalid_cbor():
+def test_207_decode_frame_fails_on_invalid_cbor():
     with pytest.raises(CborError):
         decode_frame(b"invalid cbor data")
 
 
 # TEST208: Test decode_frame fails on non-map CBOR
-def test_decode_frame_fails_on_non_map():
+def test_208_decode_frame_fails_on_non_map():
     import cbor2
     data = cbor2.dumps([1, 2, 3])  # Array, not map
 
@@ -77,7 +77,7 @@ def test_decode_frame_fails_on_non_map():
 
 
 # TEST209: Test write_frame writes length-prefixed frame
-def test_write_frame_writes_length_prefixed():
+def test_209_write_frame_writes_length_prefixed():
     output = io.BytesIO()
     frame = Frame.hello(1024, 512)
     limits = Limits(10000, 5000)
@@ -93,7 +93,7 @@ def test_write_frame_writes_length_prefixed():
 
 
 # TEST210: Test read_frame reads length-prefixed frame
-def test_read_frame_reads_length_prefixed():
+def test_210_read_frame_reads_length_prefixed():
     output = io.BytesIO()
     original = Frame.hello(2048, 1024)
     limits = Limits(10000, 5000)
@@ -110,7 +110,7 @@ def test_read_frame_reads_length_prefixed():
 
 
 # TEST211: Test read_frame returns None on EOF
-def test_read_frame_returns_none_on_eof():
+def test_211_read_frame_returns_none_on_eof():
     input_stream = io.BytesIO(b"")  # Empty stream
     limits = Limits.default()
 
@@ -119,7 +119,7 @@ def test_read_frame_returns_none_on_eof():
 
 
 # TEST212: Test read_frame fails on incomplete length prefix
-def test_read_frame_fails_on_incomplete_length_prefix():
+def test_212_read_frame_fails_on_incomplete_length_prefix():
     input_stream = io.BytesIO(b"\x00\x00")  # Only 2 bytes
     limits = Limits.default()
 
@@ -128,7 +128,7 @@ def test_read_frame_fails_on_incomplete_length_prefix():
 
 
 # TEST213: Test read_frame fails on incomplete frame data
-def test_read_frame_fails_on_incomplete_frame_data():
+def test_213_read_frame_fails_on_incomplete_frame_data():
     # Write a frame claiming 100 bytes but only provide 10
     input_stream = io.BytesIO(b"\x00\x00\x00\x64" + b"x" * 10)
     limits = Limits.default()
@@ -138,7 +138,7 @@ def test_read_frame_fails_on_incomplete_frame_data():
 
 
 # TEST214: Test write_frame enforces max frame size
-def test_write_frame_enforces_max_frame_size():
+def test_214_write_frame_enforces_max_frame_size():
     output = io.BytesIO()
 
     # Create a frame with large payload (use CHUNK frame since RES removed in Protocol v2)
@@ -151,7 +151,7 @@ def test_write_frame_enforces_max_frame_size():
 
 
 # TEST215: Test FrameReader reads multiple frames
-def test_frame_reader_reads_multiple_frames():
+def test_215_frame_reader_reads_multiple_frames():
     output = io.BytesIO()
     limits = Limits(10000, 5000)
 
@@ -175,7 +175,7 @@ def test_frame_reader_reads_multiple_frames():
 
 
 # TEST216: Test FrameWriter writes multiple frames
-def test_frame_writer_writes_multiple_frames():
+def test_216_frame_writer_writes_multiple_frames():
     output = io.BytesIO()
     limits = Limits(10000, 5000)
     writer = FrameWriter(output, limits)
@@ -198,7 +198,7 @@ def test_frame_writer_writes_multiple_frames():
 
 
 # TEST217: Test FrameReader.new creates with default limits
-def test_frame_reader_new_creates_with_default_limits():
+def test_217_frame_reader_new_creates_with_default_limits():
     input_stream = io.BytesIO()
     reader = FrameReader.new(input_stream)
 
@@ -207,7 +207,7 @@ def test_frame_reader_new_creates_with_default_limits():
 
 
 # TEST218: Test FrameWriter.new creates with default limits
-def test_frame_writer_new_creates_with_default_limits():
+def test_218_frame_writer_new_creates_with_default_limits():
     output = io.BytesIO()
     writer = FrameWriter.new(output)
 
@@ -216,7 +216,7 @@ def test_frame_writer_new_creates_with_default_limits():
 
 
 # TEST219: Test FrameReader.with_limits creates with specified limits
-def test_frame_reader_with_limits():
+def test_219_frame_reader_with_limits():
     input_stream = io.BytesIO()
     limits = Limits(2048, 1024)
     reader = FrameReader.with_limits(input_stream, limits)
@@ -226,7 +226,7 @@ def test_frame_reader_with_limits():
 
 
 # TEST220: Test FrameWriter.with_limits creates with specified limits
-def test_frame_writer_with_limits():
+def test_220_frame_writer_with_limits():
     output = io.BytesIO()
     limits = Limits(2048, 1024)
     writer = FrameWriter.with_limits(output, limits)
@@ -236,7 +236,7 @@ def test_frame_writer_with_limits():
 
 
 # TEST221: Test FrameReader.set_limits updates limits
-def test_frame_reader_set_limits():
+def test_221_frame_reader_set_limits():
     input_stream = io.BytesIO()
     reader = FrameReader.new(input_stream)
 
@@ -248,7 +248,7 @@ def test_frame_reader_set_limits():
 
 
 # TEST222: Test FrameWriter.set_limits updates limits
-def test_frame_writer_set_limits():
+def test_222_frame_writer_set_limits():
     output = io.BytesIO()
     writer = FrameWriter.new(output)
 
@@ -260,7 +260,7 @@ def test_frame_writer_set_limits():
 
 
 # TEST223: Test handshake host sends HELLO first
-def test_handshake_host_sends_hello_first():
+def test_223_handshake_host_sends_hello_first():
     # Create connected streams (simulate pipe)
     host_to_plugin = io.BytesIO()
     plugin_to_host = io.BytesIO()
@@ -296,7 +296,7 @@ def test_handshake_host_sends_hello_first():
 
 
 # TEST224: Test handshake negotiates to minimum limits
-def test_handshake_negotiates_to_minimum_limits():
+def test_224_handshake_negotiates_to_minimum_limits():
     host_to_plugin = io.BytesIO()
     plugin_to_host = io.BytesIO()
 
@@ -332,7 +332,7 @@ def test_handshake_negotiates_to_minimum_limits():
 
 
 # TEST225: Test handshake function performs full handshake
-def test_handshake_function_full_handshake():
+def test_225_handshake_function_full_handshake():
     # Create bidirectional streams
     host_to_plugin = io.BytesIO()
     plugin_to_host = io.BytesIO()
@@ -362,7 +362,7 @@ def test_handshake_function_full_handshake():
 
 
 # TEST226: Test handshake_accept receives first then sends
-def test_handshake_accept_receives_first():
+def test_226_handshake_accept_receives_first():
     host_to_plugin = io.BytesIO()
     plugin_to_host = io.BytesIO()
 
@@ -393,7 +393,7 @@ def test_handshake_accept_receives_first():
 
 
 # TEST227: Test handshake fails if plugin missing manifest
-def test_handshake_fails_if_plugin_missing_manifest():
+def test_227_handshake_fails_if_plugin_missing_manifest():
     host_to_plugin = io.BytesIO()
     plugin_to_host = io.BytesIO()
 
@@ -418,7 +418,7 @@ def test_handshake_fails_if_plugin_missing_manifest():
 
 
 # TEST228: Test read_frame enforces limit
-def test_read_frame_enforces_limit():
+def test_228_read_frame_enforces_limit():
     output = io.BytesIO()
 
     # Write a large frame (use CHUNK frame since RES removed in Protocol v2)
@@ -436,7 +436,7 @@ def test_read_frame_enforces_limit():
 
 
 # TEST229: Test frame with zero-length payload
-def test_frame_with_zero_length_payload():
+def test_229_frame_with_zero_length_payload():
     output = io.BytesIO()
     frame = Frame.chunk(MessageId.new_uuid(), "test-stream", 0, b"", 0, 0)
     limits = Limits.default()
@@ -451,7 +451,7 @@ def test_frame_with_zero_length_payload():
 
 
 # TEST230: Test frame round-trip preserves all fields
-def test_frame_roundtrip_preserves_fields():
+def test_230_frame_roundtrip_preserves_fields():
     original = Frame(
         frame_type=FrameType.REQ,
         id=MessageId.new_uuid(),
@@ -473,7 +473,7 @@ def test_frame_roundtrip_preserves_fields():
 
 
 # TEST231: Test multiple readers on same stream
-def test_multiple_readers_on_same_stream():
+def test_231_multiple_readers_on_same_stream():
     output = io.BytesIO()
     limits = Limits.default()
 
@@ -498,7 +498,7 @@ def test_multiple_readers_on_same_stream():
 
 
 # TEST232: Test writer flushes after each frame
-def test_writer_flushes_after_each_frame():
+def test_232_writer_flushes_after_each_frame():
     output = io.BytesIO()
     writer = FrameWriter.new(output)
 
@@ -511,7 +511,7 @@ def test_writer_flushes_after_each_frame():
 
 
 # TEST233: Test frame encoding preserves binary data
-def test_frame_encoding_preserves_binary_data():
+def test_233_frame_encoding_preserves_binary_data():
     # Binary data with all byte values
     binary_data = bytes(range(256))
 
@@ -524,7 +524,7 @@ def test_frame_encoding_preserves_binary_data():
 
 
 # TEST234: Test handshake with very small limits
-def test_handshake_with_very_small_limits():
+def test_234_handshake_with_very_small_limits():
     host_to_plugin = io.BytesIO()
     plugin_to_host = io.BytesIO()
 
@@ -546,7 +546,7 @@ def test_handshake_with_very_small_limits():
 
 # TEST313: Test write_stream_chunked sends STREAM_START + CHUNK(s) + STREAM_END + END for payload larger than max_chunk,
 # CHUNK frames + END frame, and reading them back reassembles the full original data
-def test_write_stream_chunked_reassembly():
+def test_313_write_stream_chunked_reassembly():
     buf = io.BytesIO()
     writer = FrameWriter(buf, Limits(DEFAULT_MAX_FRAME, 100))
 
@@ -588,7 +588,7 @@ def test_write_stream_chunked_reassembly():
 
 
 # TEST314: Test payload exactly equal to max_chunk produces STREAM_START + 1 CHUNK + STREAM_END + END
-def test_exact_max_chunk_stream_chunked():
+def test_314_exact_max_chunk_stream_chunked():
     buf = io.BytesIO()
     writer = FrameWriter(buf, Limits(DEFAULT_MAX_FRAME, 100))
 
@@ -619,7 +619,7 @@ def test_exact_max_chunk_stream_chunked():
 
 
 # TEST315: Test payload of max_chunk + 1 produces STREAM_START + 2 CHUNK + STREAM_END + END
-def test_max_chunk_plus_one_splits_into_two_chunks():
+def test_315_max_chunk_plus_one_splits_into_two_chunks():
     buf = io.BytesIO()
     writer = FrameWriter(buf, Limits(DEFAULT_MAX_FRAME, 100))
 
@@ -655,7 +655,7 @@ def test_max_chunk_plus_one_splits_into_two_chunks():
 
 
 # TEST317: Test auto-chunking preserves data integrity across chunk boundaries for 3x max_chunk payload
-def test_chunking_data_integrity_3x():
+def test_317_chunking_data_integrity_3x():
     buf = io.BytesIO()
     writer = FrameWriter(buf, Limits(DEFAULT_MAX_FRAME, 100))
 
@@ -689,7 +689,7 @@ def test_chunking_data_integrity_3x():
 
 
 # TEST389: StreamStart encode/decode roundtrip preserves stream_id and media_urn
-def test_stream_start_roundtrip():
+def test_389_stream_start_roundtrip():
     id = MessageId.new_uuid()
     stream_id = "stream-abc-123"
     media_urn = "media:bytes"
@@ -705,7 +705,7 @@ def test_stream_start_roundtrip():
 
 
 # TEST390: StreamEnd encode/decode roundtrip preserves stream_id, no media_urn
-def test_stream_end_roundtrip():
+def test_390_stream_end_roundtrip():
     id = MessageId.new_uuid()
     stream_id = "stream-xyz-789"
 
@@ -720,7 +720,7 @@ def test_stream_end_roundtrip():
 
 
 # TEST399a: RelayNotify encode/decode roundtrip preserves manifest and limits
-def test_relay_notify_roundtrip():
+def test_399a_relay_notify_roundtrip():
     manifest = b'{"caps":["cap:op=relay-test"]}'
     max_frame = 2_000_000
     max_chunk = 128_000
@@ -742,7 +742,7 @@ def test_relay_notify_roundtrip():
 
 
 # TEST400a: RelayState encode/decode roundtrip preserves resource payload
-def test_relay_state_roundtrip():
+def test_400a_relay_state_roundtrip():
     resources = b'{"gpu_memory":8192,"cpu_cores":16}'
 
     frame = Frame.relay_state(resources)

@@ -272,7 +272,6 @@ class RelaySwitch:
 
             if master_frame.error is not None:
                 # Error reading from master
-                print(f"Error reading from master {master_frame.master_idx}: {master_frame.error}")
                 self._handle_master_death(master_frame.master_idx)
                 continue
 
