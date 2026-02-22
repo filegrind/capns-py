@@ -215,10 +215,17 @@ class RelaySwitch:
         with self._lock:
             return self._negotiated_limits
 
-    def send_to_master(self, frame: Frame) -> None:
+    def send_to_master(self, frame: Frame, preferred_cap: Optional[str] = None) -> None:
         """Send a frame to the appropriate master (engine → plugin direction)
 
         Routes REQ by cap URN. Routes continuation frames by request ID.
+
+        Args:
+            frame: The frame to send
+            preferred_cap: Optional capability URN for exact routing.
+                          When provided, routes to the master whose registered cap
+                          is equivalent to this URN. When None, uses standard
+                          accepts + closest-specificity routing.
 
         Raises:
             NoHandlerError: No master found for cap
@@ -227,7 +234,7 @@ class RelaySwitch:
         with self._lock:
             if frame.frame_type == FrameType.REQ:
                 # Find master for this cap
-                dest_idx = self._find_master_for_cap(frame.cap)
+                dest_idx = self._find_master_for_cap(frame.cap, preferred_cap)
                 if dest_idx is None:
                     raise NoHandlerError(frame.cap)
 
@@ -290,29 +297,73 @@ class RelaySwitch:
                 return result_frame
             # Peer request was handled internally, continue reading
 
-    def _find_master_for_cap(self, cap_urn: str) -> Optional[int]:
+    def _find_master_for_cap(self, cap_urn: str, preferred_cap: Optional[str] = None) -> Optional[int]:
         """Find master index that can handle a capability.
 
-        Uses exact match first, then URN-level matching with request_urn.accepts(registered_urn).
-        On tie (multiple masters with same cap), first match wins and routing is consistent.
-        """
-        # Exact match first
-        for registered_cap, idx in self._cap_table:
-            if registered_cap == cap_urn:
-                return idx
+        Args:
+            cap_urn: The capability URN to find a handler for
+            preferred_cap: Optional capability URN for exact routing.
+                          When provided, uses comparable matching (broader) and prefers
+                          masters whose registered cap is equivalent to this URN.
+                          When None, uses standard accepts + closest-specificity routing.
 
-        # URN-level matching: request is pattern, registered is instance
+        Returns:
+            Master index, or None if no handler found
+        """
         try:
             request_urn = CapUrn.from_string(cap_urn)
-            for registered_cap, idx in self._cap_table:
-                try:
-                    registered_urn = CapUrn.from_string(registered_cap)
-                    if request_urn.accepts(registered_urn):
-                        return idx
-                except:
-                    pass
         except:
-            pass
+            return None
+
+        request_specificity = request_urn.specificity()
+
+        # Parse preferred cap URN if provided
+        preferred_urn = None
+        if preferred_cap:
+            try:
+                preferred_urn = CapUrn.from_string(preferred_cap)
+            except:
+                pass
+
+        # Collect ALL matching masters with their specificity scores
+        # When preferred_cap is set, use is_comparable (broader); otherwise accepts (standard)
+        matches: List[Tuple[int, int, bool]] = []  # (master_idx, specificity, is_preferred)
+
+        for registered_cap, master_idx in self._cap_table:
+            try:
+                registered_urn = CapUrn.from_string(registered_cap)
+            except:
+                continue
+
+            # Determine if this is a match
+            if preferred_urn:
+                # Comparable: either side accepts the other (broader match set)
+                is_match = request_urn.accepts(registered_urn) or registered_urn.accepts(request_urn)
+            else:
+                # Standard: request is pattern, registered cap is instance
+                is_match = request_urn.accepts(registered_urn)
+
+            if is_match:
+                specificity = registered_urn.specificity()
+                # Check if this registered cap is equivalent to the preferred cap
+                is_preferred = False
+                if preferred_urn:
+                    is_preferred = preferred_urn.accepts(registered_urn) and registered_urn.accepts(preferred_urn)
+                matches.append((master_idx, specificity, is_preferred))
+
+        if not matches:
+            return None
+
+        # If any match is preferred, pick the first preferred match
+        for idx, _, is_pref in matches:
+            if is_pref:
+                return idx
+
+        # Fall back to closest-specificity (ties broken by first match)
+        min_distance = min(abs(s - request_specificity) for _, s, _ in matches)
+        for idx, s, _ in matches:
+            if abs(s - request_specificity) == min_distance:
+                return idx
 
         return None
 
@@ -320,8 +371,8 @@ class RelaySwitch:
         """Handle a frame from a master. Returns frame to return to engine, or None if handled internally."""
         with self._lock:
             if frame.frame_type == FrameType.REQ:
-                # Peer request: plugin → plugin via switch
-                dest_idx = self._find_master_for_cap(frame.cap)
+                # Peer request: plugin → plugin via switch (no preference)
+                dest_idx = self._find_master_for_cap(frame.cap, None)
                 if dest_idx is None:
                     raise NoHandlerError(frame.cap)
 
