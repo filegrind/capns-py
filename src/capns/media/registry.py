@@ -13,7 +13,7 @@ This module provides the `MediaUrnRegistry` which handles:
 ## Usage
 ```python
 registry = await MediaUrnRegistry.new()
-spec = await registry.get_media_spec("media:pdf;bytes")
+spec = await registry.get_media_spec("media:pdf")
 print(f"Title: {spec.title}")
 ```
 """

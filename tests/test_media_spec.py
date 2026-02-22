@@ -59,11 +59,11 @@ async def test_089_resolve_from_registry_obj():
     assert resolved.media_type == "application/json"
 
 
-# TEST090: Test resolving binary media URN from registry returns octet-stream and is_binary true
+# TEST090: Test resolving wildcard media URN from registry returns octet-stream and is_binary true
 @pytest.mark.asyncio
 async def test_090_resolve_from_registry_binary():
     registry = await create_test_registry()
-    resolved = await resolve_media_urn("media:bytes", None, registry)
+    resolved = await resolve_media_urn("media:", None, registry)
     assert resolved.media_type == "application/octet-stream"
     assert resolved.is_binary()
 
@@ -250,10 +250,10 @@ def test_098_validate_no_duplicate_urns_passes_for_unique():
 # =============================================================================
 
 
-# TEST099: Test ResolvedMediaSpec is_binary returns true for bytes media URN
+# TEST099: Test ResolvedMediaSpec is_binary returns true for non-textable media URN
 def test_099_resolved_is_binary():
     resolved = ResolvedMediaSpec(
-        media_urn="media:bytes",
+        media_urn="media:",
         media_type="application/octet-stream",
         profile_uri=None,
         schema=None,
@@ -442,7 +442,7 @@ async def test_107_extensions_propagation():
     registry = await create_test_registry()
     media_specs = create_media_specs([
         MediaSpecDef(
-            urn="media:custom-pdf;bytes",
+            urn="media:custom-pdf",
             media_type="application/pdf",
             title="PDF Document",
             profile_uri="https://capns.org/schema/pdf",
@@ -454,7 +454,7 @@ async def test_107_extensions_propagation():
         )
     ])
 
-    resolved = await resolve_media_urn("media:custom-pdf;bytes", media_specs, registry)
+    resolved = await resolve_media_urn("media:custom-pdf", media_specs, registry)
     assert resolved.extensions == ["pdf"]
 
 
@@ -518,7 +518,7 @@ async def test_110_multiple_extensions():
     registry = await create_test_registry()
     media_specs = create_media_specs([
         MediaSpecDef(
-            urn="media:image;jpeg;bytes",
+            urn="media:image;jpeg",
             media_type="image/jpeg",
             title="JPEG Image",
             profile_uri="https://capns.org/schema/jpeg",
@@ -530,6 +530,6 @@ async def test_110_multiple_extensions():
         )
     ])
 
-    resolved = await resolve_media_urn("media:image;jpeg;bytes", media_specs, registry)
+    resolved = await resolve_media_urn("media:image;jpeg", media_specs, registry)
     assert resolved.extensions == ["jpg", "jpeg"]
     assert len(resolved.extensions) == 2

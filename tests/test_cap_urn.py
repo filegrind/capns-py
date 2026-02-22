@@ -58,7 +58,7 @@ def test_002_direction_specs_default_to_wildcard():
 def test_003_direction_matching():
     in_str = "media:textable;form=scalar"  # MEDIA_STRING
     out_obj = "media:form=map;textable"  # MEDIA_OBJECT
-    in_bin = "media:bytes"  # MEDIA_BINARY
+    in_bin = "media:"  # MEDIA_BINARY
     out_int = "media:integer;textable;numeric;form=scalar"  # MEDIA_INTEGER
 
     # Direction specs must match for caps to match
@@ -373,7 +373,7 @@ def test_024_directional_accepts():
     assert cap1.accepts(cap_wildcard)
 
     # Different direction specs: neither accepts the other
-    cap3 = CapUrn.from_string(f'cap:in="media:bytes";out="media:form=map;textable";op=test')
+    cap3 = CapUrn.from_string(f'cap:in="media:";out="media:form=map;textable";op=test')
     cap4 = CapUrn.from_string(f'cap:in="media:textable;form=scalar";out="media:integer;textable;numeric;form=scalar";op=test')
     assert not cap3.accepts(cap4)
     assert not cap4.accepts(cap3)
@@ -605,7 +605,7 @@ def test_045_matching_semantics_value_mismatch():
 
 # TEST046: Matching semantics - fallback pattern (cap missing tag = implicit wildcard)
 def test_046_matching_semantics_fallback_pattern():
-    in_bin = "media:bytes"
+    in_bin = "media:"
     cap = CapUrn.from_string(f'cap:in="{in_bin}";op=generate_thumbnail;out="{in_bin}"')
     request = CapUrn.from_string(f'cap:ext=wav;in="{in_bin}";op=generate_thumbnail;out="{in_bin}"')
     assert cap.accepts(request), "Test 7: Fallback pattern should accept (cap missing ext = implicit wildcard)"
@@ -613,7 +613,7 @@ def test_046_matching_semantics_fallback_pattern():
 
 # TEST047: Matching semantics - thumbnail fallback with void input
 def test_047_matching_semantics_thumbnail_void_input():
-    out_bin = "media:bytes"
+    out_bin = "media:"
     cap = CapUrn.from_string(f'cap:in="{MEDIA_VOID}";op=generate_thumbnail;out="{out_bin}"')
     request = CapUrn.from_string(f'cap:ext=wav;in="{MEDIA_VOID}";op=generate_thumbnail;out="{out_bin}"')
     assert cap.accepts(request), "Test 7b: Thumbnail fallback with void input should accept"
@@ -637,88 +637,88 @@ def test_049_matching_semantics_cross_dimension():
 
 # TEST050: Matching semantics - direction mismatch prevents matching
 def test_050_matching_semantics_direction_mismatch():
-    # media:textable;form=scalar (string) has different tags than media:bytes
+    # media:textable;form=scalar (string) has different tags than media: (wildcard)
     # Neither can provide input for the other (completely different marker tags)
     cap = CapUrn.from_string(f'cap:in="media:textable;form=scalar";op=generate;out="{MEDIA_OBJECT}"')
-    request = CapUrn.from_string(f'cap:in="media:bytes";op=generate;out="{MEDIA_OBJECT}"')
+    request = CapUrn.from_string(f'cap:in="media:";op=generate;out="{MEDIA_OBJECT}"')
     assert not cap.accepts(request), "Test 10: Direction mismatch should not accept"
 
 
 # TEST051: Semantic direction matching - generic provider matches specific request
 def test_051_direction_semantic_matching():
-    # A cap accepting media:bytes (generic) should match a request with media:pdf;bytes (specific)
+    # A cap accepting media: (generic) should match a request with media:pdf (specific)
     generic_cap = CapUrn.from_string(
-        'cap:in="media:bytes";op=generate_thumbnail;out="media:image;png;bytes;thumbnail"'
+        'cap:in="media:";op=generate_thumbnail;out="media:image;png;thumbnail"'
     )
     pdf_request = CapUrn.from_string(
-        'cap:in="media:pdf;bytes";op=generate_thumbnail;out="media:image;png;bytes;thumbnail"'
+        'cap:in="media:pdf";op=generate_thumbnail;out="media:image;png;thumbnail"'
     )
-    assert generic_cap.accepts(pdf_request), "Generic bytes provider must accept specific pdf;bytes request"
+    assert generic_cap.accepts(pdf_request), "Generic provider must accept specific pdf request"
 
-    # Generic cap also accepts epub;bytes (any bytes subtype)
+    # Generic cap also accepts epub (any subtype)
     epub_request = CapUrn.from_string(
-        'cap:in="media:epub;bytes";op=generate_thumbnail;out="media:image;png;bytes;thumbnail"'
+        'cap:in="media:epub";op=generate_thumbnail;out="media:image;png;thumbnail"'
     )
-    assert generic_cap.accepts(epub_request), "Generic bytes provider must accept epub;bytes request"
+    assert generic_cap.accepts(epub_request), "Generic provider must accept epub request"
 
     # Reverse: specific cap does NOT accept generic request
     pdf_cap = CapUrn.from_string(
-        'cap:in="media:pdf;bytes";op=generate_thumbnail;out="media:image;png;bytes;thumbnail"'
+        'cap:in="media:pdf";op=generate_thumbnail;out="media:image;png;thumbnail"'
     )
     generic_request = CapUrn.from_string(
-        'cap:in="media:bytes";op=generate_thumbnail;out="media:image;png;bytes;thumbnail"'
+        'cap:in="media:";op=generate_thumbnail;out="media:image;png;thumbnail"'
     )
-    assert not pdf_cap.accepts(generic_request), "Specific pdf;bytes cap must NOT accept generic bytes request"
+    assert not pdf_cap.accepts(generic_request), "Specific pdf cap must NOT accept generic request"
 
     # Incompatible types: pdf cap does NOT accept epub request
     assert not pdf_cap.accepts(epub_request), "PDF-specific cap must NOT accept epub request"
 
     # Output direction: cap producing more specific output accepts less specific request
     specific_out_cap = CapUrn.from_string(
-        'cap:in="media:bytes";op=generate_thumbnail;out="media:image;png;bytes;thumbnail"'
+        'cap:in="media:";op=generate_thumbnail;out="media:image;png;thumbnail"'
     )
     generic_out_request = CapUrn.from_string(
-        'cap:in="media:bytes";op=generate_thumbnail;out="media:image;bytes"'
+        'cap:in="media:";op=generate_thumbnail;out="media:image"'
     )
     assert specific_out_cap.accepts(generic_out_request), "Cap producing specific output must satisfy generic request"
 
     # Reverse output: generic output cap does NOT accept specific output request
     generic_out_cap = CapUrn.from_string(
-        'cap:in="media:bytes";op=generate_thumbnail;out="media:image;bytes"'
+        'cap:in="media:";op=generate_thumbnail;out="media:image"'
     )
     specific_out_request = CapUrn.from_string(
-        'cap:in="media:bytes";op=generate_thumbnail;out="media:image;png;bytes;thumbnail"'
+        'cap:in="media:";op=generate_thumbnail;out="media:image;png;thumbnail"'
     )
     assert not generic_out_cap.accepts(specific_out_request), "Cap producing generic output must NOT satisfy specific request"
 
 
 # TEST052: Semantic direction specificity - more media URN tags = higher specificity
 def test_052_direction_semantic_specificity():
-    # media:bytes has 1 tag, media:pdf;bytes has 2 tags
-    # media:image;png;bytes;thumbnail has 4 tags
+    # media: has 0 tags, media:pdf has 1 tag
+    # media:image;png;thumbnail has 3 tags
     generic_cap = CapUrn.from_string(
-        'cap:in="media:bytes";op=generate_thumbnail;out="media:image;png;bytes;thumbnail"'
+        'cap:in="media:";op=generate_thumbnail;out="media:image;png;thumbnail"'
     )
     specific_cap = CapUrn.from_string(
-        'cap:in="media:pdf;bytes";op=generate_thumbnail;out="media:image;png;bytes;thumbnail"'
+        'cap:in="media:pdf";op=generate_thumbnail;out="media:image;png;thumbnail"'
     )
 
-    # generic: bytes(1) + image;png;bytes;thumbnail(4) + op(1) = 6
-    assert generic_cap.specificity() == 6
-    # specific: pdf;bytes(2) + image;png;bytes;thumbnail(4) + op(1) = 7
-    assert specific_cap.specificity() == 7
+    # generic: (0 tags) + image;png;thumbnail(3) + op(1) = 4
+    assert generic_cap.specificity() == 4
+    # specific: pdf(1) + image;png;thumbnail(3) + op(1) = 5
+    assert specific_cap.specificity() == 5
 
-    assert specific_cap.specificity() > generic_cap.specificity(), "pdf;bytes cap must be more specific than bytes cap"
+    assert specific_cap.specificity() > generic_cap.specificity(), "pdf cap must be more specific than wildcard cap"
 
     # Find best match: should prefer the more specific cap when both match
     pdf_request = CapUrn.from_string(
-        'cap:in="media:pdf;bytes";op=generate_thumbnail;out="media:image;png;bytes;thumbnail"'
+        'cap:in="media:pdf";op=generate_thumbnail;out="media:image;png;thumbnail"'
     )
     caps = [generic_cap, specific_cap]
     matching = [c for c in caps if c.accepts(pdf_request)]
     best = max(matching, key=lambda c: c.specificity())
-    # MediaUrn alphabetizes tags, so pdf;bytes becomes bytes;pdf in canonical form
-    assert best.in_spec() == "media:bytes;pdf" or best.in_spec() == "media:pdf;bytes", "Must prefer the more specific pdf;bytes provider"
+    # Check the more specific pdf provider was preferred
+    assert best.in_spec() == "media:pdf", "Must prefer the more specific pdf provider"
 
 
 # =============================================================================
@@ -756,8 +756,8 @@ def test_560_with_in_out_spec():
         'cap:in="media:void";op=test;out="media:void"'
     )
 
-    changed_in = cap.with_in_spec("media:bytes")
-    assert changed_in.in_spec() == "media:bytes"
+    changed_in = cap.with_in_spec("media:")
+    assert changed_in.in_spec() == "media:"
     assert changed_in.out_spec() == MEDIA_VOID
     assert changed_in.get_tag("op") == "test"
 
@@ -766,15 +766,15 @@ def test_560_with_in_out_spec():
     assert changed_out.out_spec() == "media:string"
 
     # Chain both
-    changed_both = cap.with_in_spec("media:pdf;bytes").with_out_spec("media:txt;textable")
-    assert changed_both.in_spec() == "media:pdf;bytes" or changed_both.in_spec() == "media:bytes;pdf"
+    changed_both = cap.with_in_spec("media:pdf").with_out_spec("media:txt;textable")
+    assert changed_both.in_spec() == "media:pdf" or changed_both.in_spec() == "media:pdf"
     assert changed_both.out_spec() == "media:txt;textable" or changed_both.out_spec() == "media:textable;txt"
 
 
 # TEST561: in_media_urn and out_media_urn parse direction specs into MediaUrn
 def test_561_in_out_media_urn():
     cap = CapUrn.from_string(
-        'cap:in="media:pdf;bytes";op=extract;out="media:txt;textable"'
+        'cap:in="media:pdf";op=extract;out="media:txt;textable"'
     )
 
     in_urn = cap.in_media_urn()
@@ -869,10 +869,10 @@ def test_566_with_tag_ignores_in_out():
         'cap:in="media:void";op=test;out="media:void"'
     )
     # Attempting to set in/out via with_tag is silently ignored
-    same = cap.with_tag("in", "media:bytes")
+    same = cap.with_tag("in", "media:")
     assert same.in_spec() == MEDIA_VOID, "with_tag must not change in_spec"
 
-    same2 = cap.with_tag("out", "media:bytes")
+    same2 = cap.with_tag("out", "media:")
     assert same2.out_spec() == MEDIA_VOID, "with_tag must not change out_spec"
 
 
@@ -937,10 +937,10 @@ def test_643_wildcard_explicit_asterisk():
     assert cap.out_spec() == "media:"
 
 
-# TEST644: cap:in=media:bytes;out=* has specific in, wildcard out
+# TEST644: cap:in=media:;out=* has specific in, wildcard out
 def test_644_wildcard_specific_in_wildcard_out():
-    cap = CapUrn.from_string("cap:in=media:bytes;out=*")
-    assert cap.in_spec() == "media:bytes"
+    cap = CapUrn.from_string("cap:in=media:;out=*")
+    assert cap.in_spec() == "media:"
     assert cap.out_spec() == "media:"
 
 
@@ -957,16 +957,16 @@ def test_646_wildcard_invalid_in_spec():
         CapUrn.from_string("cap:in=foo;out=media:")
 
 
-# TEST647: cap:in=media:bytes;out=bar fails (invalid media URN)
+# TEST647: cap:in=media:;out=bar fails (invalid media URN)
 def test_647_wildcard_invalid_out_spec():
     with pytest.raises(CapUrnError):
-        CapUrn.from_string("cap:in=media:bytes;out=bar")
+        CapUrn.from_string("cap:in=media:;out=bar")
 
 
 # TEST648: Wildcard in/out match specific caps
 def test_648_wildcard_accepts_specific():
     wildcard = CapUrn.from_string("cap:")
-    specific = CapUrn.from_string("cap:in=media:bytes;out=media:text")
+    specific = CapUrn.from_string("cap:in=media:;out=media:text")
 
     assert wildcard.accepts(specific), "Wildcard should accept specific"
     assert specific.conforms_to(wildcard), "Specific should conform to wildcard"
@@ -975,7 +975,7 @@ def test_648_wildcard_accepts_specific():
 # TEST649: Specificity - wildcard has 0, specific has tag count
 def test_649_wildcard_specificity_scoring():
     wildcard = CapUrn.from_string("cap:")
-    specific = CapUrn.from_string("cap:in=media:bytes;out=media:text")
+    specific = CapUrn.from_string("cap:in=media:;out=media:text")
 
     assert wildcard.specificity() == 0, "Wildcard cap should have zero specificity"
     assert specific.specificity() > 0, "Specific cap should have non-zero specificity"
@@ -1015,7 +1015,7 @@ def test_652_wildcard_cap_identity_constant():
     assert identity.out_spec() == "media:"
 
     # Identity accepts anything (no tag constraints)
-    specific = CapUrn.from_string('cap:in=media:bytes;out=media:text;op=convert')
+    specific = CapUrn.from_string('cap:in=media:;out=media:text;op=convert')
     assert identity.accepts(specific), "Identity should accept any cap"
     assert specific.conforms_to(identity), "Specific conforms to identity"
 

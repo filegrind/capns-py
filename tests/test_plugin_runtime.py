@@ -108,7 +108,7 @@ def test_249_raw_handler():
     factory = runtime.find_handler("cap:op=raw")
     assert factory is not None
 
-    frames = make_test_frames("media:bytes", b"echo this")
+    frames = make_test_frames("media:", b"echo this")
     emitter = CliStreamEmitter()
     invoke_op(factory, frames, emitter)
     assert received[0] == b"echo this", "Op handler must echo payload"
@@ -141,7 +141,7 @@ def test_250_typed_handler_deserialization():
     factory = runtime.find_handler("cap:op=test")
     assert factory is not None
 
-    frames = make_test_frames("media:bytes", b'{"key":"hello"}')
+    frames = make_test_frames("media:", b'{"key":"hello"}')
     emitter = CliStreamEmitter()
     invoke_op(factory, frames, emitter)
     assert received[0] == b"hello"
@@ -168,7 +168,7 @@ def test_251_typed_handler_rejects_invalid_json():
     runtime.register_op("cap:op=test", JsonParseOp)
 
     factory = runtime.find_handler("cap:op=test")
-    frames = make_test_frames("media:bytes", b"not json {{{{")
+    frames = make_test_frames("media:", b"not json {{{{")
     emitter = CliStreamEmitter()
 
     with pytest.raises(Exception) as exc_info:
@@ -204,7 +204,7 @@ def test_253_handler_is_send_sync():
     assert factory is not None
 
     def thread_func():
-        frames = make_test_frames("media:bytes", b"{}")
+        frames = make_test_frames("media:", b"{}")
         emitter = CliStreamEmitter()
         invoke_op(factory, frames, emitter)
 
@@ -264,16 +264,16 @@ def test_258_with_manifest_struct():
 def test_259_extract_effective_payload_non_cbor():
     # Single stream with data matching the cap's input spec
     streams = [
-        ("stream-0", PendingStream(media_urn="media:bytes", chunks=[b"raw data"], complete=True))
+        ("stream-0", PendingStream(media_urn="media:", chunks=[b"raw data"], complete=True))
     ]
-    result = extract_effective_payload(streams, "cap:in=media:bytes;op=test;out=*")
+    result = extract_effective_payload(streams, "cap:in=media:;op=test;out=*")
     assert result == b"raw data", "Should extract matching stream"
 
 
 # TEST260: Test extract_effective_payload with wildcard in_spec accepts any stream
 def test_260_extract_effective_payload_no_content_type():
     streams = [
-        ("stream-0", PendingStream(media_urn="media:bytes", chunks=[b"raw data"], complete=True))
+        ("stream-0", PendingStream(media_urn="media:", chunks=[b"raw data"], complete=True))
     ]
     result = extract_effective_payload(streams, "cap:in=*;op=test;out=*")
     assert result == b"raw data", "Wildcard should accept any stream"
@@ -328,7 +328,7 @@ def test_263_extract_effective_payload_invalid_cbor():
     with pytest.raises(DeserializeError) as exc_info:
         extract_effective_payload(
             streams,
-            "cap:in=media:bytes;op=test;out=*"
+            "cap:in=media:;op=test;out=*"
         )
     assert "No stream found matching" in str(exc_info.value)
 
@@ -337,13 +337,13 @@ def test_263_extract_effective_payload_invalid_cbor():
 def test_264_extract_effective_payload_cbor_not_array():
     # Stream that's not complete
     streams = [
-        ("stream-0", PendingStream(media_urn="media:bytes", chunks=[b"data"], complete=False))
+        ("stream-0", PendingStream(media_urn="media:", chunks=[b"data"], complete=False))
     ]
 
     with pytest.raises(DeserializeError) as exc_info:
         extract_effective_payload(
             streams,
-            "cap:in=media:bytes;op=test;out=*"
+            "cap:in=media:;op=test;out=*"
         )
 
     assert "No stream found matching" in str(exc_info.value)
@@ -408,13 +408,13 @@ def test_270_multiple_handlers():
 
     emitter = CliStreamEmitter()
     f_alpha = runtime.find_handler("cap:op=alpha")
-    invoke_op(f_alpha, make_test_frames("media:bytes", b""), emitter)
+    invoke_op(f_alpha, make_test_frames("media:", b""), emitter)
 
     f_beta = runtime.find_handler("cap:op=beta")
-    invoke_op(f_beta, make_test_frames("media:bytes", b""), emitter)
+    invoke_op(f_beta, make_test_frames("media:", b""), emitter)
 
     f_gamma = runtime.find_handler("cap:op=gamma")
-    invoke_op(f_gamma, make_test_frames("media:bytes", b""), emitter)
+    invoke_op(f_gamma, make_test_frames("media:", b""), emitter)
 
 
 # TEST271: Test Op handler replacing an existing registration for the same cap URN
@@ -444,7 +444,7 @@ def test_271_handler_replacement():
     assert factory is not None
 
     emitter = CliStreamEmitter()
-    invoke_op(factory, make_test_frames("media:bytes", b""), emitter)
+    invoke_op(factory, make_test_frames("media:", b""), emitter)
     assert result2 == [b"second"], "later registration must replace earlier"
 
 
@@ -476,7 +476,7 @@ def test_273_extract_effective_payload_binary_value():
     binary_data = bytes(range(256))
     streams = [
         ("stream-0", PendingStream(
-            media_urn="media:pdf;bytes",
+            media_urn="media:pdf",
             chunks=[binary_data],
             complete=True
         ))
@@ -484,7 +484,7 @@ def test_273_extract_effective_payload_binary_value():
 
     result = extract_effective_payload(
         streams,
-        "cap:in=media:pdf;bytes;op=process;out=*"
+        "cap:in=media:pdf;op=process;out=*"
     )
     assert result == binary_data, "binary values must roundtrip through stream extraction"
 
@@ -522,14 +522,14 @@ def test_336_file_path_reads_file_passes_bytes(tmp_path):
     test_file.write_bytes(b"PDF binary content 336")
 
     cap = create_test_cap(
-        'cap:in="media:pdf;bytes";op=process;out="media:void"',
+        'cap:in="media:pdf";op=process;out="media:void"',
         "Process PDF",
         "process",
         [CapArg(
             media_urn="media:file-path;textable;form=scalar",
             required=True,
             sources=[
-                StdinSource("media:pdf;bytes"),
+                StdinSource("media:pdf"),
                 PositionSource(0),
             ]
         )]
@@ -553,7 +553,7 @@ def test_336_file_path_reads_file_passes_bytes(tmp_path):
             received_payload.append(b''.join(chunks))
         def metadata(self): return OpMetadata.builder("CollectBytesOp").build()
 
-    runtime.register_op('cap:in="media:pdf;bytes";op=process;out="media:void"', CollectBytesOp)
+    runtime.register_op('cap:in="media:pdf";op=process;out="media:void"', CollectBytesOp)
 
     # Simulate CLI invocation: plugin process /path/to/file.pdf
     cli_args = [str(test_file)]
@@ -619,14 +619,14 @@ def test_338_file_path_via_cli_flag(tmp_path):
     test_file.write_bytes(b"PDF via flag 338")
 
     cap = create_test_cap(
-        'cap:in="media:pdf;bytes";op=process;out="media:void"',
+        'cap:in="media:pdf";op=process;out="media:void"',
         "Process",
         "process",
         [CapArg(
             media_urn="media:file-path;textable;form=scalar",
             required=True,
             sources=[
-                StdinSource("media:pdf;bytes"),
+                StdinSource("media:pdf"),
                 CliFlagSource("--file"),
             ]
         )]
@@ -655,14 +655,14 @@ def test_339_file_path_array_glob_expansion(tmp_path):
     file2.write_bytes(b"content2")
 
     cap = create_test_cap(
-        'cap:in="media:bytes";op=batch;out="media:void"',
+        'cap:in="media:";op=batch;out="media:void"',
         "Batch",
         "batch",
         [CapArg(
             media_urn="media:file-path;textable;form=list",
             required=True,
             sources=[
-                StdinSource("media:bytes"),
+                StdinSource("media:"),
                 PositionSource(0),
             ]
         )]
@@ -695,14 +695,14 @@ def test_340_file_not_found_clear_error():
     from capns.bifaci.plugin_runtime import IoRuntimeError
 
     cap = create_test_cap(
-        'cap:in="media:pdf;bytes";op=test;out="media:void"',
+        'cap:in="media:pdf";op=test;out="media:void"',
         "Test",
         "test",
         [CapArg(
             media_urn="media:file-path;textable;form=scalar",
             required=True,
             sources=[
-                StdinSource("media:pdf;bytes"),
+                StdinSource("media:pdf"),
                 PositionSource(0),
             ]
         )]
@@ -731,14 +731,14 @@ def test_341_stdin_precedence_over_file_path(tmp_path):
 
     # Stdin source comes BEFORE position source
     cap = create_test_cap(
-        'cap:in="media:bytes";op=test;out="media:void"',
+        'cap:in="media:";op=test;out="media:void"',
         "Test",
         "test",
         [CapArg(
             media_urn="media:file-path;textable;form=scalar",
             required=True,
             sources=[
-                StdinSource("media:bytes"),  # First
+                StdinSource("media:"),  # First
                 PositionSource(0),            # Second
             ]
         )]
@@ -765,14 +765,14 @@ def test_342_file_path_position_zero_reads_first_arg(tmp_path):
     test_file.write_bytes(b"binary data 342")
 
     cap = create_test_cap(
-        'cap:in="media:bytes";op=test;out="media:void"',
+        'cap:in="media:";op=test;out="media:void"',
         "Test",
         "test",
         [CapArg(
             media_urn="media:file-path;textable;form=scalar",
             required=True,
             sources=[
-                StdinSource("media:bytes"),
+                StdinSource("media:"),
                 PositionSource(0),
             ]
         )]
@@ -826,14 +826,14 @@ def test_344_file_path_array_invalid_json_fails():
     from capns.bifaci.plugin_runtime import CliError
 
     cap = create_test_cap(
-        'cap:in="media:bytes";op=batch;out="media:void"',
+        'cap:in="media:";op=batch;out="media:void"',
         "Test",
         "batch",
         [CapArg(
             media_urn="media:file-path;textable;form=list",
             required=True,
             sources=[
-                StdinSource("media:bytes"),
+                StdinSource("media:"),
                 PositionSource(0),
             ]
         )]
@@ -864,14 +864,14 @@ def test_345_file_path_array_one_file_missing_fails_hard(tmp_path):
     file2_path = tmp_path / "test345_missing.txt"
 
     cap = create_test_cap(
-        'cap:in="media:bytes";op=batch;out="media:void"',
+        'cap:in="media:";op=batch;out="media:void"',
         "Test",
         "batch",
         [CapArg(
             media_urn="media:file-path;textable;form=list",
             required=True,
             sources=[
-                StdinSource("media:bytes"),
+                StdinSource("media:"),
                 PositionSource(0),
             ]
         )]
@@ -908,14 +908,14 @@ def test_346_large_file_reads_successfully(tmp_path):
     test_file.write_bytes(large_data)
 
     cap = create_test_cap(
-        'cap:in="media:bytes";op=test;out="media:void"',
+        'cap:in="media:";op=test;out="media:void"',
         "Test",
         "test",
         [CapArg(
             media_urn="media:file-path;textable;form=scalar",
             required=True,
             sources=[
-                StdinSource("media:bytes"),
+                StdinSource("media:"),
                 PositionSource(0),
             ]
         )]
@@ -940,14 +940,14 @@ def test_347_empty_file_reads_as_empty_bytes(tmp_path):
     test_file.write_bytes(b"")
 
     cap = create_test_cap(
-        'cap:in="media:bytes";op=test;out="media:void"',
+        'cap:in="media:";op=test;out="media:void"',
         "Test",
         "test",
         [CapArg(
             media_urn="media:file-path;textable;form=scalar",
             required=True,
             sources=[
-                StdinSource("media:bytes"),
+                StdinSource("media:"),
                 PositionSource(0),
             ]
         )]
@@ -972,7 +972,7 @@ def test_348_file_path_conversion_respects_source_order(tmp_path):
 
     # Position source BEFORE stdin source
     cap = create_test_cap(
-        'cap:in="media:bytes";op=test;out="media:void"',
+        'cap:in="media:";op=test;out="media:void"',
         "Test",
         "test",
         [CapArg(
@@ -980,7 +980,7 @@ def test_348_file_path_conversion_respects_source_order(tmp_path):
             required=True,
             sources=[
                 PositionSource(0),            # First
-                StdinSource("media:bytes"),  # Second
+                StdinSource("media:"),  # Second
             ]
         )]
     )
@@ -1006,7 +1006,7 @@ def test_349_file_path_multiple_sources_fallback(tmp_path):
     test_file.write_bytes(b"content 349")
 
     cap = create_test_cap(
-        'cap:in="media:bytes";op=test;out="media:void"',
+        'cap:in="media:";op=test;out="media:void"',
         "Test",
         "test",
         [CapArg(
@@ -1015,7 +1015,7 @@ def test_349_file_path_multiple_sources_fallback(tmp_path):
             sources=[
                 CliFlagSource("--file"),     # First (not provided)
                 PositionSource(0),            # Second (provided)
-                StdinSource("media:bytes"),  # Third (not used)
+                StdinSource("media:"),  # Third (not used)
             ]
         )]
     )
@@ -1041,14 +1041,14 @@ def test_350_full_cli_mode_with_file_path_integration(tmp_path):
     test_file.write_bytes(test_content)
 
     cap = create_test_cap(
-        'cap:in="media:pdf;bytes";op=process;out="media:result;textable"',
+        'cap:in="media:pdf";op=process;out="media:result;textable"',
         "Process PDF",
         "process",
         [CapArg(
             media_urn="media:file-path;textable;form=scalar",
             required=True,
             sources=[
-                StdinSource("media:pdf;bytes"),
+                StdinSource("media:pdf"),
                 PositionSource(0),
             ]
         )]
@@ -1073,7 +1073,7 @@ def test_350_full_cli_mode_with_file_path_integration(tmp_path):
         def metadata(self): return OpMetadata.builder("CollectBytesOp").build()
 
     runtime.register_op(
-        'cap:in="media:pdf;bytes";op=process;out="media:result;textable"',
+        'cap:in="media:pdf";op=process;out="media:result;textable"',
         CollectBytesOp,
     )
 
@@ -1108,14 +1108,14 @@ def test_351_file_path_array_empty_array():
     from capns.cap.definition import CapArg, StdinSource, PositionSource
 
     cap = create_test_cap(
-        'cap:in="media:bytes";op=batch;out="media:void"',
+        'cap:in="media:";op=batch;out="media:void"',
         "Test",
         "batch",
         [CapArg(
             media_urn="media:file-path;textable;form=list",
             required=False,  # Not required
             sources=[
-                StdinSource("media:bytes"),
+                StdinSource("media:"),
                 PositionSource(0),
             ]
         )]
@@ -1148,14 +1148,14 @@ def test_352_file_permission_denied_clear_error(tmp_path):
     os.chmod(test_file, 0o000)
 
     cap = create_test_cap(
-        'cap:in="media:bytes";op=test;out="media:void"',
+        'cap:in="media:";op=test;out="media:void"',
         "Test",
         "test",
         [CapArg(
             media_urn="media:file-path;textable;form=scalar",
             required=True,
             sources=[
-                StdinSource("media:bytes"),
+                StdinSource("media:"),
                 PositionSource(0),
             ]
         )]
@@ -1217,14 +1217,14 @@ def test_354_glob_pattern_no_matches_empty_array(tmp_path):
     from capns.cap.definition import CapArg, StdinSource, PositionSource
 
     cap = create_test_cap(
-        'cap:in="media:bytes";op=batch;out="media:void"',
+        'cap:in="media:";op=batch;out="media:void"',
         "Test",
         "batch",
         [CapArg(
             media_urn="media:file-path;textable;form=list",
             required=True,
             sources=[
-                StdinSource("media:bytes"),
+                StdinSource("media:"),
                 PositionSource(0),
             ]
         )]
@@ -1261,14 +1261,14 @@ def test_355_glob_pattern_skips_directories(tmp_path):
     file1.write_bytes(b"content1")
 
     cap = create_test_cap(
-        'cap:in="media:bytes";op=batch;out="media:void"',
+        'cap:in="media:";op=batch;out="media:void"',
         "Test",
         "batch",
         [CapArg(
             media_urn="media:file-path;textable;form=list",
             required=True,
             sources=[
-                StdinSource("media:bytes"),
+                StdinSource("media:"),
                 PositionSource(0),
             ]
         )]
@@ -1306,14 +1306,14 @@ def test_356_multiple_glob_patterns_combined(tmp_path):
     file2.write_bytes(b"json")
 
     cap = create_test_cap(
-        'cap:in="media:bytes";op=batch;out="media:void"',
+        'cap:in="media:";op=batch;out="media:void"',
         "Test",
         "batch",
         [CapArg(
             media_urn="media:file-path;textable;form=list",
             required=True,
             sources=[
-                StdinSource("media:bytes"),
+                StdinSource("media:"),
                 PositionSource(0),
             ]
         )]
@@ -1356,14 +1356,14 @@ def test_357_symlinks_followed(tmp_path):
     os.symlink(real_file, link_file)
 
     cap = create_test_cap(
-        'cap:in="media:bytes";op=test;out="media:void"',
+        'cap:in="media:";op=test;out="media:void"',
         "Test",
         "test",
         [CapArg(
             media_urn="media:file-path;textable;form=scalar",
             required=True,
             sources=[
-                StdinSource("media:bytes"),
+                StdinSource("media:"),
                 PositionSource(0),
             ]
         )]
@@ -1390,14 +1390,14 @@ def test_358_binary_file_non_utf8(tmp_path):
     test_file.write_bytes(binary_data)
 
     cap = create_test_cap(
-        'cap:in="media:bytes";op=test;out="media:void"',
+        'cap:in="media:";op=test;out="media:void"',
         "Test",
         "test",
         [CapArg(
             media_urn="media:file-path;textable;form=scalar",
             required=True,
             sources=[
-                StdinSource("media:bytes"),
+                StdinSource("media:"),
                 PositionSource(0),
             ]
         )]
@@ -1419,14 +1419,14 @@ def test_359_invalid_glob_pattern_fails():
     from capns.bifaci.plugin_runtime import CliError
 
     cap = create_test_cap(
-        'cap:in="media:bytes";op=batch;out="media:void"',
+        'cap:in="media:";op=batch;out="media:void"',
         "Test",
         "batch",
         [CapArg(
             media_urn="media:file-path;textable;form=list",
             required=True,
             sources=[
-                StdinSource("media:bytes"),
+                StdinSource("media:"),
                 PositionSource(0),
             ]
         )]
@@ -1458,14 +1458,14 @@ def test_360_extract_effective_payload_with_file_data(tmp_path):
     test_file.write_bytes(pdf_content)
 
     cap = create_test_cap(
-        'cap:in="media:pdf;bytes";op=process;out="media:void"',
+        'cap:in="media:pdf";op=process;out="media:void"',
         "Process",
         "process",
         [CapArg(
             media_urn="media:file-path;textable;form=scalar",
             required=True,
             sources=[
-                StdinSource("media:pdf;bytes"),
+                StdinSource("media:pdf"),
                 PositionSource(0),
             ]
         )]
@@ -1500,14 +1500,14 @@ def test_361_cli_mode_file_path(tmp_path):
     test_file.write_bytes(pdf_content)
 
     cap = create_test_cap(
-        'cap:in="media:pdf;bytes";op=process;out="media:void"',
+        'cap:in="media:pdf";op=process;out="media:void"',
         "Process",
         "process",
         [CapArg(
             media_urn="media:file-path;textable;form=scalar",
             required=True,
             sources=[
-                StdinSource("media:pdf;bytes"),
+                StdinSource("media:pdf"),
                 PositionSource(0),
             ]
         )]
@@ -1524,7 +1524,7 @@ def test_361_cli_mode_file_path(tmp_path):
     # Verify arguments contain file-path URN (before conversion)
     assert len(arguments) == 1
     # The argument should have the stdin source URN (after conversion)
-    assert arguments[0].media_urn == "media:pdf;bytes"
+    assert arguments[0].media_urn == "media:pdf"
     assert arguments[0].value == pdf_content
 
 
@@ -1545,14 +1545,14 @@ def test_362_cli_mode_piped_binary():
 
     # Create cap that accepts stdin
     cap = create_test_cap(
-        'cap:in="media:pdf;bytes";op=process;out="media:void"',
+        'cap:in="media:pdf";op=process;out="media:void"',
         "Process",
         "process",
         [CapArg(
-            media_urn="media:pdf;bytes",
+            media_urn="media:pdf",
             required=True,
             sources=[
-                StdinSource("media:pdf;bytes"),
+                StdinSource("media:pdf"),
             ]
         )]
     )
@@ -1578,7 +1578,7 @@ def test_362_cli_mode_piped_binary():
     media_urn = arg_map.get("media_urn")
     value = arg_map.get("value")
 
-    assert media_urn == "media:pdf;bytes", "Media URN should match cap in_spec"
+    assert media_urn == "media:pdf", "Media URN should match cap in_spec"
     assert value == pdf_content, "Binary content should be preserved exactly"
 
 
@@ -1607,14 +1607,14 @@ def test_363_cbor_mode_chunked_content():
         def metadata(self): return OpMetadata.builder("StreamingOp").build()
 
     cap = create_test_cap(
-        'cap:in="media:pdf;bytes";op=process;out="media:void"',
+        'cap:in="media:pdf";op=process;out="media:void"',
         "Process",
         "process",
         [CapArg(
-            media_urn="media:pdf;bytes",
+            media_urn="media:pdf",
             required=True,
             sources=[
-                StdinSource("media:pdf;bytes"),
+                StdinSource("media:pdf"),
             ]
         )]
     )
@@ -1625,7 +1625,7 @@ def test_363_cbor_mode_chunked_content():
 
     # Build CBOR payload
     from capns.cap.caller import CapArgumentValue
-    args = [CapArgumentValue(media_urn="media:pdf;bytes", value=pdf_content)]
+    args = [CapArgumentValue(media_urn="media:pdf", value=pdf_content)]
     payload_bytes = cbor2.dumps([
         {
             "media_urn": arg.media_urn,
@@ -1645,7 +1645,7 @@ def test_363_cbor_mode_chunked_content():
     stream_id = "test-stream"
 
     # Send STREAM_START
-    frames.put(Frame.stream_start(request_id, stream_id, "media:bytes"))
+    frames.put(Frame.stream_start(request_id, stream_id, "media:"))
 
     # Send CHUNK frames (raw payload bytes, not CBOR-re-encoded)
     offset = 0
@@ -1706,7 +1706,7 @@ def test_364_cbor_mode_file_path(tmp_path):
 # TEST395: Small payload (< max_chunk) produces correct CBOR arguments
 def test_395_build_payload_small():
     cap = create_test_cap(
-        'cap:in="media:bytes";op=process;out="media:void"',
+        'cap:in="media:";op=process;out="media:void"',
         "Process",
         "process",
         [],
@@ -1738,7 +1738,7 @@ def test_395_build_payload_small():
 # TEST396: Large payload (> max_chunk) accumulates across chunks correctly
 def test_396_build_payload_large():
     cap = create_test_cap(
-        'cap:in="media:bytes";op=process;out="media:void"',
+        'cap:in="media:";op=process;out="media:void"',
         "Process",
         "process",
         [],
@@ -1765,7 +1765,7 @@ def test_396_build_payload_large():
 # TEST397: Empty reader produces valid empty CBOR arguments
 def test_397_build_payload_empty():
     cap = create_test_cap(
-        'cap:in="media:bytes";op=process;out="media:void"',
+        'cap:in="media:";op=process;out="media:void"',
         "Process",
         "process",
         [],
@@ -1796,7 +1796,7 @@ class ErrorReader:
 # TEST398: IO error from reader propagates as error
 def test_398_build_payload_io_error():
     cap = create_test_cap(
-        'cap:in="media:bytes";op=process;out="media:void"',
+        'cap:in="media:";op=process;out="media:void"',
         "Process",
         "process",
         [],
@@ -1841,7 +1841,7 @@ def test_479_custom_identity_overrides_default():
     # Custom Op must be invoked (not the default)
     factory = runtime.find_handler(CAP_IDENTITY)
     assert factory is not None
-    frames = make_test_frames("media:bytes", b"test")
+    frames = make_test_frames("media:", b"test")
     emitter = CliStreamEmitter()
     with pytest.raises(Exception) as exc_info:
         invoke_op(factory, frames, emitter)

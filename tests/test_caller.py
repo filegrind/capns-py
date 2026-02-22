@@ -40,7 +40,7 @@ def test_157_stdin_source_file_reference_creation():
     tracked_file_id = "tracked-file-123"
     original_path = "/path/to/original.pdf"
     security_bookmark = bytes([0x62, 0x6F, 0x6F, 0x6B])  # "book"
-    media_urn = "media:pdf;bytes"
+    media_urn = "media:pdf"
 
     source = StdinSourceFileReference(
         tracked_file_id=tracked_file_id,
@@ -97,7 +97,7 @@ def test_161_stdin_source_file_reference_clone():
         tracked_file_id="file-123",
         original_path="/path/to/file.pdf",
         security_bookmark=b"bookmark",
-        media_urn="media:pdf;bytes",
+        media_urn="media:pdf",
     )
 
     # Create a copy
@@ -124,13 +124,13 @@ def test_162_stdin_source_debug_format():
         tracked_file_id="file-123",
         original_path="/path/file.pdf",
         security_bookmark=b"bookmark",
-        media_urn="media:pdf;bytes",
+        media_urn="media:pdf",
     )
     file_repr = repr(file_source)
     assert "StdinSource::FileReference" in file_repr
     assert "file-123" in file_repr
     assert "/path/file.pdf" in file_repr
-    assert "media:pdf;bytes" in file_repr
+    assert "media:pdf" in file_repr
 
 
 # ============================================================================
@@ -171,7 +171,7 @@ def test_276_cap_argument_value_as_str_success():
 def test_277_cap_argument_value_as_str_fails_binary():
     # Binary data that's not valid UTF-8
     binary_data = bytes([0xFF, 0xFE, 0xFD, 0xFC])
-    arg = CapArgumentValue("media:bytes", binary_data)
+    arg = CapArgumentValue("media:", binary_data)
 
     with pytest.raises(UnicodeDecodeError):
         arg.value_as_str()
@@ -210,10 +210,10 @@ def test_280_cap_argument_value_debug():
     assert "test value" in text_repr
 
     # Binary value
-    binary_arg = CapArgumentValue("media:bytes", bytes([0x01, 0x02, 0x03]))
+    binary_arg = CapArgumentValue("media:", bytes([0x01, 0x02, 0x03]))
     binary_repr = repr(binary_arg)
     assert "CapArgumentValue" in binary_repr
-    assert "media:bytes" in binary_repr
+    assert "media:" in binary_repr
     assert "bytes" in binary_repr
 
 
@@ -244,7 +244,7 @@ def test_282_cap_argument_value_unicode():
 def test_283_cap_argument_value_large_binary():
     # Create a large binary payload (10KB)
     large_data = bytes(range(256)) * 40  # 10,240 bytes
-    arg = CapArgumentValue("media:bytes", large_data)
+    arg = CapArgumentValue("media:", large_data)
 
     assert len(arg.value) == 10240
     assert arg.value == large_data

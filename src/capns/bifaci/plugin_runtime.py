@@ -645,7 +645,7 @@ def collect_args_by_media_urn(frames: queue.Queue, media_urn: str) -> bytes:
 
     Args:
         frames: Queue of Frame objects (will be consumed)
-        media_urn: Media URN to match (e.g., "media:bytes")
+        media_urn: Media URN to match (e.g., "media:")
 
     Returns:
         Concatenated payload bytes for matching stream
@@ -1401,7 +1401,7 @@ class PluginRuntime:
                         response_stream_id = f"resp-{_uuid.uuid4().hex[:8]}"
                         # SyncFrameWriter assigns seq centrally for all frames
                         # routing_id (XID) is propagated from incoming REQ to all response frames
-                        emitter = ThreadSafeEmitter(sync_writer, request_id, response_stream_id, "media:bytes", routing_id, max_chunk)
+                        emitter = ThreadSafeEmitter(sync_writer, request_id, response_stream_id, "media:", routing_id, max_chunk)
                         peer_invoker = PeerInvokerImpl(sync_writer, pending_peer_requests, max_chunk)
 
                         # Create queue and populate with request frames

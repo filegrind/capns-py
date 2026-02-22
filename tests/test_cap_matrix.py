@@ -387,7 +387,7 @@ def test_121_cap_block_more_specific_wins():
     # Provider: less specific cap
     provider_host = MockCapSet("provider")
     provider_cap = make_cap(
-        'cap:in="media:bytes";op=generate_thumbnail;out="media:bytes"',
+        'cap:in="media:";op=generate_thumbnail;out="media:"',
         "Provider Thumbnail Generator (generic)"
     )
     provider_registry.register_cap_set("provider", provider_host, [provider_cap])
@@ -395,7 +395,7 @@ def test_121_cap_block_more_specific_wins():
     # Plugin: more specific cap (has ext=pdf)
     plugin_host = MockCapSet("plugin")
     plugin_cap = make_cap(
-        'cap:ext=pdf;in="media:bytes";op=generate_thumbnail;out="media:bytes"',
+        'cap:ext=pdf;in="media:";op=generate_thumbnail;out="media:"',
         "Plugin PDF Thumbnail Generator (specific)"
     )
     plugin_registry.register_cap_set("plugin", plugin_host, [plugin_cap])
@@ -406,7 +406,7 @@ def test_121_cap_block_more_specific_wins():
     composite.add_registry("plugins", plugin_registry)
 
     # Request for PDF thumbnails - plugin's more specific cap should win
-    request = 'cap:ext=pdf;in="media:bytes";op=generate_thumbnail;out="media:bytes"'
+    request = 'cap:ext=pdf;in="media:";op=generate_thumbnail;out="media:"'
     best = composite.find_best_cap_set(request)
 
     # Plugin registry has specificity 4 (in, op, out, ext)
@@ -506,7 +506,7 @@ def test_125_cap_block_fallback_scenario():
     # Provider with generic fallback (can handle any file type)
     provider_host = MockCapSet("provider_fallback")
     provider_cap = make_cap(
-        'cap:in="media:bytes";op=generate_thumbnail;out="media:bytes"',
+        'cap:in="media:";op=generate_thumbnail;out="media:"',
         "Generic Thumbnail Provider"
     )
     provider_registry.register_cap_set("provider_fallback", provider_host, [provider_cap])
@@ -514,7 +514,7 @@ def test_125_cap_block_fallback_scenario():
     # Plugin with PDF-specific handler
     plugin_host = MockCapSet("pdf_plugin")
     plugin_cap = make_cap(
-        'cap:ext=pdf;in="media:bytes";op=generate_thumbnail;out="media:bytes"',
+        'cap:ext=pdf;in="media:";op=generate_thumbnail;out="media:"',
         "PDF Thumbnail Plugin"
     )
     plugin_registry.register_cap_set("pdf_plugin", plugin_host, [plugin_cap])
@@ -525,7 +525,7 @@ def test_125_cap_block_fallback_scenario():
     composite.add_registry("plugins", plugin_registry)
 
     # Request for PDF thumbnail
-    request = 'cap:ext=pdf;in="media:bytes";op=generate_thumbnail;out="media:bytes"'
+    request = 'cap:ext=pdf;in="media:";op=generate_thumbnail;out="media:"'
     best = composite.find_best_cap_set(request)
 
     # Plugin (specificity 4) should beat provider (specificity 3)
@@ -563,7 +563,7 @@ def test_133_cap_block_graph_integration():
     # Provider: binary -> str
     provider_host = MockCapSet("provider")
     provider_cap = Cap(
-        urn=CapUrn.from_string('cap:in="media:bytes";op=extract;out="media:textable;form=scalar"'),
+        urn=CapUrn.from_string('cap:in="media:";op=extract;out="media:textable;form=scalar"'),
         title="Provider Text Extractor",
         command="extract"
     )
@@ -589,7 +589,7 @@ def test_133_cap_block_graph_integration():
 
     # Check nodes (exact spec strings - alphabetically canonicalized)
     nodes = graph.get_nodes()
-    assert 'media:bytes' in nodes
+    assert 'media:' in nodes
     assert 'media:textable;form=scalar' in nodes  # Canonicalized (alphabetical)
     assert 'media:form=map;textable' in nodes  # Canonicalized (alphabetical)
 

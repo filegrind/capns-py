@@ -409,8 +409,8 @@ class ResolvedMediaSpec:
         return MediaUrn.from_string(self.media_urn)
 
     def is_binary(self) -> bool:
-        """Check if this represents binary data.
-        Returns true if the "bytes" marker tag is present in the source media URN.
+        """Check if this represents binary (non-text) data.
+        Returns True if the "textable" marker tag is NOT present in the source media URN.
         """
         return self._parse_media_urn().is_binary()
 

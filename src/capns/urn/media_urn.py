@@ -36,8 +36,8 @@ MEDIA_NUMBER = "media:textable;numeric;form=scalar"
 MEDIA_BOOLEAN = "media:bool;textable;form=scalar"
 # Media URN for JSON object type - textable (via JSON.stringify), form=map (key-value structure)
 MEDIA_OBJECT = "media:form=map;textable"
-# Media URN for binary data - binary (raw bytes)
-MEDIA_BINARY = "media:bytes"
+# Media URN for binary data (wildcard - matches everything)
+MEDIA_BINARY = "media:"
 
 # Array types - URNs must match base.toml definitions
 # Media URN for string array type - textable, list (no primary type prefix)
@@ -52,30 +52,30 @@ MEDIA_BOOLEAN_ARRAY = "media:bool;textable;form=list"
 MEDIA_OBJECT_ARRAY = "media:form=list;textable"
 
 # Semantic media types for specialized content
-# Media URN for PNG image data - matches CATALOG: media:image;png;bytes
-MEDIA_PNG = "media:image;png;bytes"
+# Media URN for PNG image data
+MEDIA_PNG = "media:image;png"
 # Media URN for audio data (wav, mp3, flac, etc.)
-MEDIA_AUDIO = "media:wav;audio;bytes;"
+MEDIA_AUDIO = "media:wav;audio"
 # Media URN for video data (mp4, webm, mov, etc.)
-MEDIA_VIDEO = "media:video;bytes"
+MEDIA_VIDEO = "media:video"
 
 # Semantic AI input types - distinguished by their purpose/context
 # Media URN for audio input containing speech for transcription (Whisper)
-MEDIA_AUDIO_SPEECH = "media:audio;wav;bytes;speech"
+MEDIA_AUDIO_SPEECH = "media:audio;wav;speech"
 # Media URN for thumbnail image output
-MEDIA_IMAGE_THUMBNAIL = "media:image;png;bytes;thumbnail"
+MEDIA_IMAGE_THUMBNAIL = "media:image;png;thumbnail"
 
 # Collection types for folder hierarchies
 # Media URN for a collection (folder with nested structure as form=map)
-MEDIA_COLLECTION = "media:collection;form=map"
+MEDIA_COLLECTION = "media:collection;textable;form=map"
 # Media URN for a flat collection (folder contents as form=list)
-MEDIA_COLLECTION_LIST = "media:collection;form=list"
+MEDIA_COLLECTION_LIST = "media:collection;textable;form=list"
 
 # Document types (PRIMARY naming - type IS the format)
 # Media URN for PDF documents
-MEDIA_PDF = "media:pdf;bytes"
+MEDIA_PDF = "media:pdf"
 # Media URN for EPUB documents
-MEDIA_EPUB = "media:epub;bytes"
+MEDIA_EPUB = "media:epub"
 
 # Text format types (PRIMARY naming - type IS the format)
 # Media URN for Markdown text
@@ -142,8 +142,6 @@ MEDIA_DISBOUND_PAGE = "media:disbound-page;textable;form=list"
 MEDIA_CAPTION_OUTPUT = "media:image-caption;textable;form=map"
 # Media URN for transcription output - textable, form=map
 MEDIA_TRANSCRIPTION_OUTPUT = "media:transcription;textable;form=map"
-# Media URN for vision inference output - textable, form=map
-MEDIA_VISION_INFERENCE_OUTPUT = "media:vision-inference-output;textable;form=map"
 # Media URN for decision output (bit choice) - matches CATALOG
 MEDIA_DECISION = "media:decision;bool;textable;form=scalar"
 # Media URN for decision array output (bit choices) - matches CATALOG
@@ -163,12 +161,12 @@ def text_media_urn_for_ext(ext: str) -> str:
 
 def image_media_urn_for_ext(ext: str) -> str:
     """Helper to build image media URN with extension"""
-    return f"media:image;ext={ext};bytes"
+    return f"media:image;ext={ext}"
 
 
 def audio_media_urn_for_ext(ext: str) -> str:
     """Helper to build audio media URN with extension"""
-    return f"media:audio;ext={ext};bytes"
+    return f"media:audio;ext={ext}"
 
 
 # =============================================================================
@@ -272,10 +270,10 @@ class MediaUrn:
         return self._urn.specificity()
 
     def is_binary(self) -> bool:
-        """Check if this media URN represents binary data (bytes marker tag)"""
-        # Check for 'bytes' tag (valueless or with any value)
-        tag_val = self._urn.get_tag("bytes")
-        return tag_val is not None
+        """Check if this represents binary (non-text) data.
+        Returns True if the "textable" marker tag is NOT present."""
+        tag_val = self._urn.get_tag("textable")
+        return tag_val is None
 
     def is_map(self) -> bool:
         """Check if this media URN represents map/object structure (form=map)"""

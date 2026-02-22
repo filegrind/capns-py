@@ -257,7 +257,7 @@ def test_418_route_continuation_by_req_id():
         r = FrameReader(r_pr)
         req_id = MessageId.new_uuid()
         w.write(Frame.req(req_id, "cap:op=cont", b"", "text/plain"))
-        w.write(Frame.stream_start(req_id, "arg-0", "media:bytes"))
+        w.write(Frame.stream_start(req_id, "arg-0", "media:"))
         w.write(Frame.chunk(req_id, "arg-0", 0, b"payload-data"))
         w.write(Frame.stream_end(req_id, "arg-0"))
         w.write(Frame.end(req_id))
@@ -352,7 +352,7 @@ def test_420_plugin_frames_forwarded_to_relay():
             req_id = req.id
             r.read()  # END
             w.write(Frame.log(req_id, "info", "processing"))
-            w.write(Frame.stream_start(req_id, "output", "media:bytes"))
+            w.write(Frame.stream_start(req_id, "output", "media:"))
             w.write(Frame.chunk(req_id, "output", 0, b"data"))
             w.write(Frame.stream_end(req_id, "output"))
             w.write(Frame.end(req_id))

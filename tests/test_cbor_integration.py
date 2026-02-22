@@ -139,7 +139,7 @@ def test_286_streaming_chunks():
         request_id = frame.id
 
         sid = "response"
-        writer.write(Frame.stream_start(request_id, sid, "media:bytes"))
+        writer.write(Frame.stream_start(request_id, sid, "media:"))
         for seq, data in enumerate([b"chunk1", b"chunk2", b"chunk3"]):
             writer.write(Frame.chunk(request_id, sid, seq, data))
         writer.write(Frame.stream_end(request_id, sid))

@@ -52,13 +52,13 @@ def test_110_cap_with_stdin():
 
     # Add stdin argument
     stdin_arg = CapArg(
-        media_urn="media:pdf;bytes",
+        media_urn="media:pdf",
         required=True,
-        sources=[StdinSource("media:pdf;bytes")],
+        sources=[StdinSource("media:pdf")],
     )
     cap.add_arg(stdin_arg)
 
-    assert cap.get_stdin_media_urn() == "media:pdf;bytes"
+    assert cap.get_stdin_media_urn() == "media:pdf"
 
 
 # TEST111: Test Cap with no stdin returns None for get_stdin_media_urn
@@ -145,9 +145,9 @@ def test_115_cap_json_roundtrip():
     cap = Cap(urn, "Convert", "convert-cmd")
 
     stdin_arg = CapArg(
-        media_urn="media:pdf;bytes",
+        media_urn="media:pdf",
         required=True,
-        sources=[StdinSource("media:pdf;bytes")],
+        sources=[StdinSource("media:pdf")],
     )
     cap.add_arg(stdin_arg)
 
@@ -167,7 +167,7 @@ def test_115_cap_json_roundtrip():
 # TEST116: Test CapArg with multiple sources stores all source types
 def test_116_cap_arg_multiple_sources():
     sources = [
-        StdinSource("media:bytes"),
+        StdinSource("media:"),
         PositionSource(0),
         CliFlagSource("--input"),
     ]

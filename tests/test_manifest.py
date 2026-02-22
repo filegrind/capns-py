@@ -57,9 +57,9 @@ def test_150_cap_manifest_json_serialization():
 
     # Add stdin via args architecture
     stdin_arg = CapArg(
-        media_urn="media:pdf;bytes",
+        media_urn="media:pdf",
         required=True,
-        sources=[StdinSource("media:pdf;bytes")],
+        sources=[StdinSource("media:pdf")],
     )
     cap.add_arg(stdin_arg)
 
@@ -75,7 +75,7 @@ def test_150_cap_manifest_json_serialization():
     assert '"name":"TestComponent"' in json_str or '"name": "TestComponent"' in json_str
     assert '"version":"0.1.0"' in json_str or '"version": "0.1.0"' in json_str
     assert '"author":"Test Author"' in json_str or '"author": "Test Author"' in json_str
-    assert '"stdin":"media:pdf;bytes"' in json_str or '"stdin": "media:pdf;bytes"' in json_str
+    assert '"stdin":"media:pdf"' in json_str or '"stdin": "media:pdf"' in json_str
 
     # Test deserialization
     deserialized = CapManifest.from_json(json_str)
@@ -170,9 +170,9 @@ def test_155_cap_manifest_complex_roundtrip():
     cap.set_description("A processing capability")
 
     stdin_arg = CapArg(
-        media_urn="media:bytes",
+        media_urn="media:",
         required=True,
-        sources=[StdinSource("media:bytes")],
+        sources=[StdinSource("media:")],
         arg_description="Input data",
     )
     cap.add_arg(stdin_arg)

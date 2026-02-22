@@ -124,7 +124,7 @@ class CapGraph:
 
         Uses MediaUrn.conforms_to() matching: returns edges where the provided spec
         conforms to the edge's from_spec requirement. This allows a specific media URN
-        like "media:pdf;bytes" to match caps that accept "media:pdf".
+        like "media:pdf" to match caps that accept "media:".
         """
         try:
             provided_urn = MediaUrn.from_string(spec)

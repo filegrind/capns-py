@@ -113,14 +113,14 @@ def test_137_parse_registry_json():
 def test_138_parse_registry_json_with_stdin():
     """Test parsing cap JSON with stdin args"""
     json_str = '''{
-        "urn": "cap:in=\\"media:pdf;bytes\\";op=extract_metadata;out=\\"media:file-metadata;textable;form=map\\"",
+        "urn": "cap:in=\\"media:pdf\\";op=extract_metadata;out=\\"media:file-metadata;textable;form=map\\"",
         "command": "extract-metadata",
         "title": "Extract Metadata",
         "args": [
             {
-                "media_urn": "media:pdf;bytes",
+                "media_urn": "media:pdf",
                 "required": true,
-                "sources": [{"stdin": "media:pdf;bytes"}]
+                "sources": [{"stdin": "media:pdf"}]
             }
         ]
     }'''
@@ -129,7 +129,7 @@ def test_138_parse_registry_json_with_stdin():
 
     assert cap.title == "Extract Metadata"
     assert cap.accepts_stdin()
-    assert cap.get_stdin_media_urn() == "media:pdf;bytes"  # As specified in JSON
+    assert cap.get_stdin_media_urn() == "media:pdf"  # As specified in JSON
 
 
 # TEST139: Test URL construction keeps cap prefix literal and only encodes tags part

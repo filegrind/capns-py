@@ -406,7 +406,7 @@ def test_365_stream_start_frame():
     """Test STREAM_START frame stores all fields"""
     req_id = MessageId.new_uuid()
     stream_id = "stream-abc-123"
-    media_urn = "media:bytes"
+    media_urn = "media:"
 
     frame = Frame.stream_start(req_id, stream_id, media_urn)
 

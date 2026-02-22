@@ -46,7 +46,7 @@ def test_060_wrong_prefix_fails():
         MediaUrn.from_string("cap:string")
 
 
-# TEST061: Test is_binary returns true only when bytes marker tag is present
+# TEST061: Test is_binary returns true when textable marker tag is NOT present
 def test_061_is_binary():
     binary_urn = MediaUrn.from_string(MEDIA_BINARY)
     assert binary_urn.is_binary()
@@ -206,10 +206,10 @@ def test_073_extension_helpers():
 
 # TEST074: Test media URN matching using tagged URN semantics with specific and generic requirements
 def test_074_media_urn_matching():
-    generic_handler = MediaUrn.from_string("media:bytes")
-    specific_request = MediaUrn.from_string("media:pdf;bytes")
-    assert specific_request.conforms_to(generic_handler), "Specific pdf;bytes request should conform to generic bytes handler"
-    assert not generic_handler.conforms_to(specific_request), "Generic bytes request should NOT conform to specific pdf;bytes handler"
+    generic_handler = MediaUrn.from_string("media:")
+    specific_request = MediaUrn.from_string("media:pdf")
+    assert specific_request.conforms_to(generic_handler), "Specific pdf request should conform to generic handler"
+    assert not generic_handler.conforms_to(specific_request), "Generic request should NOT conform to specific pdf handler"
 
 
 # TEST075: Test matching with implicit wildcards where handlers with fewer tags can handle more requests
@@ -224,9 +224,9 @@ def test_075_matching():
 
 # TEST076: Test specificity increases with more tags for ranking matches
 def test_076_specificity():
-    urn1 = MediaUrn.from_string("media:bytes")
-    urn2 = MediaUrn.from_string("media:pdf;bytes")
-    urn3 = MediaUrn.from_string("media:image;png;bytes;thumbnail")
+    urn1 = MediaUrn.from_string("media:")
+    urn2 = MediaUrn.from_string("media:pdf")
+    urn3 = MediaUrn.from_string("media:image;png;thumbnail")
 
     assert urn1.specificity() < urn2.specificity()
     assert urn2.specificity() < urn3.specificity()
@@ -269,7 +269,7 @@ def test_306_availability_and_path_output_distinct():
 def test_546_is_image():
     assert MediaUrn.from_string(MEDIA_PNG).is_image()
     assert MediaUrn.from_string(MEDIA_IMAGE_THUMBNAIL).is_image()
-    assert MediaUrn.from_string("media:image;jpg;bytes").is_image()
+    assert MediaUrn.from_string("media:image;jpg").is_image()
     # Non-image types
     assert not MediaUrn.from_string(MEDIA_PDF).is_image()
     assert not MediaUrn.from_string(MEDIA_STRING).is_image()
@@ -281,7 +281,7 @@ def test_546_is_image():
 def test_547_is_audio():
     assert MediaUrn.from_string(MEDIA_AUDIO).is_audio()
     assert MediaUrn.from_string(MEDIA_AUDIO_SPEECH).is_audio()
-    assert MediaUrn.from_string("media:audio;mp3;bytes").is_audio()
+    assert MediaUrn.from_string("media:audio;mp3").is_audio()
     # Non-audio types
     assert not MediaUrn.from_string(MEDIA_VIDEO).is_audio()
     assert not MediaUrn.from_string(MEDIA_PNG).is_audio()
@@ -291,7 +291,7 @@ def test_547_is_audio():
 # TEST548: is_video returns true only when video marker tag is present
 def test_548_is_video():
     assert MediaUrn.from_string(MEDIA_VIDEO).is_video()
-    assert MediaUrn.from_string("media:video;mp4;bytes").is_video()
+    assert MediaUrn.from_string("media:video;mp4").is_video()
     # Non-video types
     assert not MediaUrn.from_string(MEDIA_AUDIO).is_video()
     assert not MediaUrn.from_string(MEDIA_PNG).is_video()
@@ -380,7 +380,7 @@ def test_556_image_media_urn_for_ext():
     jpg_urn_str = image_media_urn_for_ext("jpg")
     parsed = MediaUrn.from_string(jpg_urn_str)
     assert parsed.is_image(), "image helper must set image tag"
-    assert parsed.is_binary(), "image helper must set bytes tag"
+    assert parsed.is_binary(), "image helper must produce binary (non-textable) URN"
     assert parsed.extension() == "jpg"
 
 
@@ -389,7 +389,7 @@ def test_557_audio_media_urn_for_ext():
     mp3_urn_str = audio_media_urn_for_ext("mp3")
     parsed = MediaUrn.from_string(mp3_urn_str)
     assert parsed.is_audio(), "audio helper must set audio tag"
-    assert parsed.is_binary(), "audio helper must set bytes tag"
+    assert parsed.is_binary(), "audio helper must produce binary (non-textable) URN"
     assert parsed.extension() == "mp3"
 
 
@@ -425,5 +425,5 @@ def test_558_predicate_constant_consistency():
     void_urn = MediaUrn.from_string(MEDIA_VOID)
     assert void_urn.is_void()
     assert not void_urn.is_text()
-    assert not void_urn.is_binary()
+    assert void_urn.is_binary()  # void has no textable tag
     assert not void_urn.is_numeric()

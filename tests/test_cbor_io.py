@@ -553,7 +553,7 @@ def test_313_write_stream_chunked_reassembly():
     request_id = MessageId.new_uuid()
     data = bytes(i % 256 for i in range(250))
 
-    writer.write_stream_chunked(request_id, "resp-1", "media:bytes", data)
+    writer.write_stream_chunked(request_id, "resp-1", "media:", data)
 
     buf.seek(0)
     reader = FrameReader(buf)
@@ -571,7 +571,7 @@ def test_313_write_stream_chunked_reassembly():
     assert len(frames) == 6, f"Expected 6 frames (STREAM_START + 3 CHUNK + STREAM_END + END), got {len(frames)}"
     assert frames[0].frame_type == FrameType.STREAM_START
     assert frames[0].stream_id == "resp-1"
-    assert frames[0].media_urn == "media:bytes"
+    assert frames[0].media_urn == "media:"
     assert frames[1].frame_type == FrameType.CHUNK
     assert frames[1].stream_id == "resp-1"
     assert frames[2].frame_type == FrameType.CHUNK
@@ -595,7 +595,7 @@ def test_314_exact_max_chunk_stream_chunked():
     request_id = MessageId.new_uuid()
     data = bytes([0xAB] * 100)
 
-    writer.write_stream_chunked(request_id, "resp-1", "media:bytes", data)
+    writer.write_stream_chunked(request_id, "resp-1", "media:", data)
 
     buf.seek(0)
     reader = FrameReader(buf)
@@ -626,7 +626,7 @@ def test_315_max_chunk_plus_one_splits_into_two_chunks():
     request_id = MessageId.new_uuid()
     data = bytes(range(101))
 
-    writer.write_stream_chunked(request_id, "resp-1", "media:bytes", data)
+    writer.write_stream_chunked(request_id, "resp-1", "media:", data)
 
     buf.seek(0)
     reader = FrameReader(buf)
@@ -663,7 +663,7 @@ def test_317_chunking_data_integrity_3x():
     pattern = b"ABCDEFGHIJ"
     data = (pattern * 30)  # 300 bytes
 
-    writer.write_stream_chunked(request_id, "resp-1", "media:bytes", data)
+    writer.write_stream_chunked(request_id, "resp-1", "media:", data)
 
     buf.seek(0)
     reader = FrameReader(buf)
@@ -692,7 +692,7 @@ def test_317_chunking_data_integrity_3x():
 def test_389_stream_start_roundtrip():
     id = MessageId.new_uuid()
     stream_id = "stream-abc-123"
-    media_urn = "media:bytes"
+    media_urn = "media:"
 
     frame = Frame.stream_start(id, stream_id, media_urn)
     encoded = encode_frame(frame)
@@ -701,7 +701,7 @@ def test_389_stream_start_roundtrip():
     assert decoded.frame_type == FrameType.STREAM_START
     assert decoded.id == id
     assert decoded.stream_id == "stream-abc-123"
-    assert decoded.media_urn == "media:bytes"
+    assert decoded.media_urn == "media:"
 
 
 # TEST390: StreamEnd encode/decode roundtrip preserves stream_id, no media_urn
