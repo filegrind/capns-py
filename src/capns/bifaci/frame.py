@@ -224,6 +224,23 @@ def compute_checksum(data: bytes) -> int:
     return hash_value
 
 
+def verify_chunk_checksum(frame: "Frame") -> None:
+    """Verify a CHUNK frame's checksum matches its payload.
+
+    Raises:
+        ValueError: If checksum is missing or mismatched.
+    """
+    if frame.checksum is None:
+        raise ValueError("CHUNK frame missing required checksum field")
+    payload = frame.payload if frame.payload is not None else b""
+    expected = compute_checksum(payload)
+    if frame.checksum != expected:
+        raise ValueError(
+            f"CHUNK checksum mismatch: expected {expected}, got {frame.checksum} "
+            f"(payload {len(payload)} bytes)"
+        )
+
+
 class Frame:
     """A CBOR protocol frame"""
 

@@ -56,7 +56,7 @@ import cbor2
 
 from ops import Op, OpMetadata, DryContext, WetContext, ExecutionFailedError
 
-from capns.bifaci.frame import Frame, FrameType, Limits, MessageId, DEFAULT_MAX_FRAME, DEFAULT_MAX_CHUNK, compute_checksum, SeqAssigner, FlowKey
+from capns.bifaci.frame import Frame, FrameType, Limits, MessageId, DEFAULT_MAX_FRAME, DEFAULT_MAX_CHUNK, compute_checksum, verify_chunk_checksum, SeqAssigner, FlowKey
 from capns.bifaci.io import handshake_accept, FrameReader, FrameWriter, CborError, ProtocolError
 from capns.cap.caller import CapArgumentValue
 from capns.cap.definition import ArgSource, Cap, CapArg, CliFlagSource
@@ -586,9 +586,12 @@ class IdentityOp(Op):
         req: Request = wet.get_required(WET_KEY_REQUEST)
         frames = req.take_frames()
         for frame in iter(frames.get, None):
-            if frame.frame_type == FrameType.CHUNK and frame.payload:
-                value = cbor2.loads(frame.payload)
-                req.emitter().emit_cbor(value)
+            if frame.frame_type == FrameType.CHUNK:
+                # Verify checksum (protocol v2 integrity check)
+                verify_chunk_checksum(frame)
+                if frame.payload:
+                    value = cbor2.loads(frame.payload)
+                    req.emitter().emit_cbor(value)
             elif frame.frame_type == FrameType.END:
                 break
 
@@ -665,6 +668,8 @@ def collect_args_by_media_urn(frames: queue.Queue, media_urn: str) -> bytes:
                 streams[frame.stream_id] = (frame.media_urn, [])
 
         elif frame.frame_type == FrameType.CHUNK:
+            # Verify checksum (protocol v2 integrity check)
+            verify_chunk_checksum(frame)
             if frame.stream_id and frame.stream_id in streams:
                 if frame.payload:
                     streams[frame.stream_id][1].append(frame.payload)
@@ -721,6 +726,8 @@ def collect_peer_response(frames: queue.Queue) -> bytes:
 
     for frame in iter(frames.get, None):
         if frame.frame_type == FrameType.CHUNK:
+            # Verify checksum (protocol v2 integrity check)
+            verify_chunk_checksum(frame)
             if frame.payload:
                 chunks.append(frame.payload)
 
@@ -760,6 +767,8 @@ def collect_streams(frames: queue.Queue) -> List[Tuple[str, bytes]]:
                 streams[frame.stream_id] = (frame.media_urn, [])
 
         elif frame.frame_type == FrameType.CHUNK:
+            # Verify checksum (protocol v2 integrity check)
+            verify_chunk_checksum(frame)
             if frame.stream_id and frame.stream_id in streams:
                 if frame.payload:
                     streams[frame.stream_id][1].append(frame.payload)
@@ -1274,6 +1283,17 @@ class PluginRuntime:
                 # Protocol v2: CHUNK must have stream_id
                 if frame.stream_id is None:
                     err_frame = Frame.err(frame.id, "PROTOCOL_ERROR", "CHUNK frame missing stream_id")
+                    try:
+                        sync_writer.write(err_frame)
+                    except Exception:
+                        pass
+                    continue
+
+                # Verify checksum (protocol v2 integrity check)
+                try:
+                    verify_chunk_checksum(frame)
+                except ValueError as e:
+                    err_frame = Frame.err(frame.id, "CORRUPTED_DATA", str(e))
                     try:
                         sync_writer.write(err_frame)
                     except Exception:

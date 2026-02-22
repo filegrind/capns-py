@@ -14,6 +14,7 @@ from capns.bifaci.frame import (
     DEFAULT_MAX_FRAME,
     DEFAULT_MAX_CHUNK,
     compute_checksum,
+    verify_chunk_checksum,
 )
 
 
@@ -514,3 +515,32 @@ def test_402_relay_state_factory_and_payload():
 def test_403_frame_type_one_past_relay_state():
     """Test that value 12 is invalid (one past RelayState)"""
     assert FrameType.from_u8(12) is None, "value 12 is one past RelayState"
+
+
+# TEST667: verify_chunk_checksum detects corrupted payload
+def test_667_verify_chunk_checksum_detects_corruption():
+    """Test that verify_chunk_checksum detects corrupted payloads"""
+    id = MessageId.new_uuid()
+    stream_id = "stream-test"
+    payload = b"original payload data"
+    checksum = compute_checksum(payload)
+
+    # Create valid chunk frame
+    frame = Frame.chunk(id, stream_id, 0, payload, len(payload), checksum)
+
+    # Valid frame should pass verification
+    verify_chunk_checksum(frame)  # Should not raise
+
+    # Corrupt the payload (simulate transmission error)
+    frame.payload = b"corrupted payload!!"
+
+    # Corrupted frame should fail verification
+    with pytest.raises(ValueError) as exc_info:
+        verify_chunk_checksum(frame)
+    assert "checksum mismatch" in str(exc_info.value)
+
+    # Missing checksum should fail
+    frame.checksum = None
+    with pytest.raises(ValueError) as exc_info:
+        verify_chunk_checksum(frame)
+    assert "missing" in str(exc_info.value)
