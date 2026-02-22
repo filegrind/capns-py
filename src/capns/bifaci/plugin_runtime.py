@@ -49,7 +49,7 @@ import threading
 import queue
 import glob
 from pathlib import Path
-from typing import Callable, Protocol, Optional, Dict, List, Any
+from typing import Callable, Protocol, Optional, Dict, List, Any, Tuple
 from abc import ABC, abstractmethod
 from dataclasses import dataclass
 import cbor2
@@ -735,6 +735,119 @@ def collect_peer_response(frames: queue.Queue) -> bytes:
     return b''.join(chunks)
 
 
+def collect_streams(frames: queue.Queue) -> List[Tuple[str, bytes]]:
+    """Collect each stream individually into a list of (media_urn, bytes) pairs.
+
+    Each stream's bytes are accumulated separately — NOT concatenated.
+    Use find_stream() helpers to retrieve args by URN pattern matching.
+
+    Args:
+        frames: Queue of Frame objects (will be consumed)
+
+    Returns:
+        List of (media_urn, bytes) tuples, one per stream
+
+    Raises:
+        RuntimeError: If protocol error occurs
+    """
+    # Track streams: stream_id → (media_urn, chunks)
+    streams = {}
+    result = []
+
+    for frame in iter(frames.get, None):
+        if frame.frame_type == FrameType.STREAM_START:
+            if frame.stream_id and frame.media_urn:
+                streams[frame.stream_id] = (frame.media_urn, [])
+
+        elif frame.frame_type == FrameType.CHUNK:
+            if frame.stream_id and frame.stream_id in streams:
+                if frame.payload:
+                    streams[frame.stream_id][1].append(frame.payload)
+
+        elif frame.frame_type == FrameType.STREAM_END:
+            if frame.stream_id and frame.stream_id in streams:
+                media_urn, chunks = streams[frame.stream_id]
+                result.append((media_urn, b''.join(chunks)))
+                del streams[frame.stream_id]
+
+        elif frame.frame_type == FrameType.END:
+            break
+
+        elif frame.frame_type == FrameType.ERR:
+            code = frame.error_code() or "UNKNOWN"
+            message = frame.error_message() or "Unknown error"
+            raise RuntimeError(f"Error: [{code}] {message}")
+
+    return result
+
+
+def find_stream(streams: List[Tuple[str, bytes]], media_urn: str) -> Optional[bytes]:
+    """Find a stream's bytes by exact URN equivalence.
+
+    Uses MediaUrn.is_equivalent() — matches only if both URNs have the
+    exact same tag set (order-independent). Both the caller and the plugin
+    know the arg media URNs from the cap definition, so this is always an
+    exact match — never a subsumption/pattern match.
+
+    Args:
+        streams: List of (media_urn, bytes) tuples from collect_streams()
+        media_urn: Full media URN from cap arg definition (e.g., "media:model-spec;textable;form=scalar")
+
+    Returns:
+        Stream bytes if found, None otherwise
+    """
+    try:
+        target = MediaUrn.from_string(media_urn)
+    except Exception:
+        return None
+
+    for urn_str, data in streams:
+        try:
+            urn = MediaUrn.from_string(urn_str)
+            if target.is_equivalent(urn):
+                return data
+        except Exception:
+            continue
+
+    return None
+
+
+def find_stream_str(streams: List[Tuple[str, bytes]], media_urn: str) -> Optional[str]:
+    """Like find_stream but returns a UTF-8 string."""
+    data = find_stream(streams, media_urn)
+    if data is None:
+        return None
+    try:
+        return data.decode('utf-8')
+    except UnicodeDecodeError:
+        return None
+
+
+def require_stream(streams: List[Tuple[str, bytes]], media_urn: str) -> bytes:
+    """Like find_stream but fails hard if not found.
+
+    Raises:
+        RuntimeError: If stream not found
+    """
+    data = find_stream(streams, media_urn)
+    if data is None:
+        raise RuntimeError(f"Missing required arg: {media_urn}")
+    return data
+
+
+def require_stream_str(streams: List[Tuple[str, bytes]], media_urn: str) -> str:
+    """Like require_stream but returns a UTF-8 string.
+
+    Raises:
+        RuntimeError: If stream not found or not valid UTF-8
+    """
+    data = require_stream(streams, media_urn)
+    try:
+        return data.decode('utf-8')
+    except UnicodeDecodeError as e:
+        raise RuntimeError(f"Arg '{media_urn}' is not valid UTF-8: {e}")
+
+
 def extract_effective_payload(
     streams: list,
     cap_urn: str
@@ -840,9 +953,23 @@ class PluginRuntime:
         """Create a new plugin runtime with a pre-built CapManifest.
         This is the preferred method as it ensures the manifest is valid.
 
-        Auto-ensures CAP_IDENTITY is present in the manifest.
+        IMPORTANT: Manifest MUST declare CAP_IDENTITY - fails hard if missing.
         """
-        manifest = manifest.ensure_identity()
+        # Validate manifest - FAIL HARD if CAP_IDENTITY not declared
+        from capns.standard.caps import CAP_IDENTITY
+        identity_urn = CapUrn.from_string(CAP_IDENTITY)
+
+        has_identity = any(
+            identity_urn.conforms_to(cap.urn) or cap.urn.conforms_to(identity_urn)
+            for cap in manifest.caps
+        )
+
+        if not has_identity:
+            raise ValueError(
+                "Manifest validation failed - plugin MUST declare CAP_IDENTITY (cap:). "
+                "All plugins must explicitly declare capabilities, no implicit fallbacks allowed."
+            )
+
         manifest_data = json.dumps(manifest.to_dict()).encode('utf-8')
         instance = cls(manifest_data)
         instance.manifest = manifest
