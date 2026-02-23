@@ -17,7 +17,7 @@ import time
 import pytest
 
 from capns.bifaci.host_runtime import PluginHost
-from capns.bifaci.frame import Frame, FrameType, Limits, MessageId
+from capns.bifaci.frame import Frame, FrameType, Limits, MessageId, compute_checksum
 from capns.bifaci.io import (
     FrameReader,
     FrameWriter,
@@ -258,8 +258,8 @@ def test_418_route_continuation_by_req_id():
         req_id = MessageId.new_uuid()
         w.write(Frame.req(req_id, "cap:op=cont", b"", "text/plain"))
         w.write(Frame.stream_start(req_id, "arg-0", "media:"))
-        w.write(Frame.chunk(req_id, "arg-0", 0, b"payload-data"))
-        w.write(Frame.stream_end(req_id, "arg-0"))
+        w.write(Frame.chunk(req_id, "arg-0", 0, b"payload-data", 0, compute_checksum(b"payload-data")))
+        w.write(Frame.stream_end(req_id, "arg-0", 1))
         w.write(Frame.end(req_id))
         frame = r.read()
         if frame is not None and frame.frame_type == FrameType.END:
@@ -353,8 +353,8 @@ def test_420_plugin_frames_forwarded_to_relay():
             r.read()  # END
             w.write(Frame.log(req_id, "info", "processing"))
             w.write(Frame.stream_start(req_id, "output", "media:"))
-            w.write(Frame.chunk(req_id, "output", 0, b"data"))
-            w.write(Frame.stream_end(req_id, "output"))
+            w.write(Frame.chunk(req_id, "output", 0, b"data", 0, compute_checksum(b"data")))
+            w.write(Frame.stream_end(req_id, "output", 1))
             w.write(Frame.end(req_id))
         simulate_plugin(pr, pw, manifest, handler)
 

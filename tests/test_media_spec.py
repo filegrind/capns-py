@@ -59,11 +59,24 @@ async def test_089_resolve_from_registry_obj():
     assert resolved.media_type == "application/json"
 
 
-# TEST090: Test resolving wildcard media URN from registry returns octet-stream and is_binary true
+# TEST090: Test resolving wildcard media URN returns octet-stream and is_binary true
 @pytest.mark.asyncio
 async def test_090_resolve_from_registry_binary():
     registry = await create_test_registry()
-    resolved = await resolve_media_urn("media:", None, registry)
+    media_specs = create_media_specs([
+        MediaSpecDef(
+            urn="media:",
+            media_type="application/octet-stream",
+            title="Bytes",
+            profile_uri="https://capns.org/schema/bytes",
+            schema=None,
+            description="Raw byte sequence.",
+            validation=None,
+            metadata=None,
+            extensions=[],
+        )
+    ])
+    resolved = await resolve_media_urn("media:", media_specs, registry)
     assert resolved.media_type == "application/octet-stream"
     assert resolved.is_binary()
 

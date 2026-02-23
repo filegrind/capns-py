@@ -166,7 +166,7 @@ def test_184_chunk_frame():
     """Test CHUNK frame creation with stream_id (Protocol v2)"""
     id = MessageId.new_uuid()
     payload = b"data"
-    frame = Frame.chunk(id, "stream-1", 3, payload, index=0, checksum=compute_checksum(payload))
+    frame = Frame.chunk(id, "stream-1", 3, payload, 0, compute_checksum(payload))
     assert frame.frame_type == FrameType.CHUNK
     assert frame.id == id
     assert frame.stream_id == "stream-1"
@@ -526,7 +526,7 @@ def test_667_verify_chunk_checksum_detects_corruption():
     checksum = compute_checksum(payload)
 
     # Create valid chunk frame
-    frame = Frame.chunk(id, stream_id, 0, payload, len(payload), checksum)
+    frame = Frame.chunk(id, stream_id, 0, payload, 0, checksum)
 
     # Valid frame should pass verification
     verify_chunk_checksum(frame)  # Should not raise

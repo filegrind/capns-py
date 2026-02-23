@@ -20,6 +20,7 @@ from capns.bifaci.frame import (
     Limits,
     DEFAULT_MAX_FRAME,
     DEFAULT_MAX_CHUNK,
+    compute_checksum,
 )
 from capns.bifaci.io import (
     FrameReader,
@@ -141,8 +142,8 @@ def test_286_streaming_chunks():
         sid = "response"
         writer.write(Frame.stream_start(request_id, sid, "media:"))
         for seq, data in enumerate([b"chunk1", b"chunk2", b"chunk3"]):
-            writer.write(Frame.chunk(request_id, sid, seq, data))
-        writer.write(Frame.stream_end(request_id, sid))
+            writer.write(Frame.chunk(request_id, sid, seq, data, seq, compute_checksum(data)))
+        writer.write(Frame.stream_end(request_id, sid, 3))
         writer.write(Frame.end(request_id, None))
 
     plugin = threading.Thread(target=plugin_thread, daemon=True)

@@ -5,7 +5,7 @@ import threading
 
 import pytest
 
-from capns.bifaci.frame import Frame, FrameType, Limits, MessageId
+from capns.bifaci.frame import Frame, FrameType, Limits, MessageId, compute_checksum
 from capns.bifaci.io import FrameReader, FrameWriter
 from capns.bifaci.relay import RelaySlave, RelayMaster
 
@@ -142,7 +142,7 @@ def test_407_protocol_frames_pass_through():
     def runtime_write_thread():
         try:
             writer = FrameWriter(runtime_writes)
-            chunk = Frame.chunk(chunk_id, "stream-1", 0, b"response")
+            chunk = Frame.chunk(chunk_id, "stream-1", 0, b"response", 0, compute_checksum(b"response"))
             writer.write(chunk)
             runtime_writes.close()
         except Exception as e:
@@ -287,7 +287,7 @@ def test_409_slave_injects_relay_notify_midstream():
         RelaySlave.send_notify(writer, initial, limits)
 
         # Then: a normal CHUNK
-        chunk = Frame.chunk(MessageId.new_uuid(), "stream-1", 0, b"data")
+        chunk = Frame.chunk(MessageId.new_uuid(), "stream-1", 0, b"data", 0, compute_checksum(b"data"))
         writer.write(chunk)
 
         # Then: updated RelayNotify
@@ -445,7 +445,7 @@ def test_412_bidirectional_concurrent_flow():
     def runtime_write():
         try:
             writer = FrameWriter(runtime_writes)
-            chunk = Frame.chunk(resp_id, "s1", 0, b"resp-a")
+            chunk = Frame.chunk(resp_id, "s1", 0, b"resp-a", 0, compute_checksum(b"resp-a"))
             end = Frame.end(resp_id, None)
             writer.write(chunk)
             writer.write(end)
