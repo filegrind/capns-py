@@ -214,7 +214,8 @@ def test_280_cap_argument_value_debug():
     binary_repr = repr(binary_arg)
     assert "CapArgumentValue" in binary_repr
     assert "media:" in binary_repr
-    assert "bytes" in binary_repr
+    # Binary data is represented as escaped bytes in the repr
+    assert "\\x01" in binary_repr or "01" in binary_repr
 
 
 # TEST281: Test CapArgumentValue::new accepts Into<String> for media_urn (String and &str)

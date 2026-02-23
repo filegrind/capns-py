@@ -409,11 +409,11 @@ def test_121_cap_block_more_specific_wins():
     request = 'cap:ext=pdf;in="media:";op=generate_thumbnail;out="media:"'
     best = composite.find_best_cap_set(request)
 
-    # Plugin registry has specificity 4 (in, op, out, ext)
-    # Provider registry has specificity 3 (in, op, out)
+    # Plugin registry has specificity 2 (ext=pdf, op=generate_thumbnail; in/out="media:" are wildcards, contribute 0)
+    # Provider registry has specificity 1 (op=generate_thumbnail only)
     # Plugin should win even though providers were added first
     assert best.registry_name == "plugins", "More specific plugin should win over less specific provider"
-    assert best.specificity == 4, "Plugin cap has 4 specific tags"
+    assert best.specificity == 2, "Plugin cap has 2 specific tags (ext=pdf, op=generate_thumbnail)"
     assert best.cap.title == "Plugin PDF Thumbnail Generator (specific)"
 
 
@@ -598,8 +598,10 @@ def test_133_cap_block_graph_integration():
     assert len(edges) == 2
 
     # Check that we have appropriate edges
+    # Edge 1: media: (base binary) -> media:textable;form=scalar
+    # Edge 2: media:textable;form=scalar -> media:form=map;textable
     edge_pairs = [(e.from_spec, e.to_spec) for e in edges]
-    assert any('bytes' in from_spec and ('scalar' in to_spec or 'textable' in to_spec) for from_spec, to_spec in edge_pairs)
+    assert any(from_spec == 'media:' and ('scalar' in to_spec or 'textable' in to_spec) for from_spec, to_spec in edge_pairs)
     assert any(('scalar' in from_spec or 'textable' in from_spec) and 'map' in to_spec for from_spec, to_spec in edge_pairs)
 
 
