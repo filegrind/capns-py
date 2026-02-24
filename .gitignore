@@ -41,6 +41,6 @@ htmlcov/
 # OS
 .DS_Store
 Thumbs.db
-diffs/.ws/
-.ws/
+diffs/.wsb/
+.wsb/
 diffs/
