@@ -284,14 +284,14 @@ def test_261_extract_effective_payload_cbor_match():
     # Stream with media URN that matches cap's input spec
     streams = [
         ("stream-0", PendingStream(
-            media_urn="media:string;textable;form=scalar",
+            media_urn="media:string;textable",
             chunks=[b"hello"],
             complete=True
         ))
     ]
     result = extract_effective_payload(
         streams,
-        "cap:in=media:string;textable;form=scalar;op=test;out=*"
+        "cap:in=media:string;textable;op=test;out=*"
     )
     assert result == b"hello"
 
@@ -315,7 +315,7 @@ def test_262_extract_effective_payload_cbor_no_match():
     with pytest.raises(DeserializeError) as exc_info:
         extract_effective_payload(
             streams,
-            "cap:in=media:string;textable;form=scalar;op=test;out=*"
+            "cap:in=media:string;textable;op=test;out=*"
         )
 
     assert "No stream found matching" in str(exc_info.value)
@@ -458,7 +458,7 @@ def test_272_extract_effective_payload_multiple_args():
             complete=True
         )),
         ("stream-1", PendingStream(
-            media_urn="media:model-spec;textable;form=scalar",
+            media_urn="media:model-spec;textable",
             chunks=[b"correct"],
             complete=True
         ))
@@ -466,7 +466,7 @@ def test_272_extract_effective_payload_multiple_args():
 
     result = extract_effective_payload(
         streams,
-        "cap:in=media:model-spec;textable;form=scalar;op=infer;out=*"
+        "cap:in=media:model-spec;textable;op=infer;out=*"
     )
     assert result == b"correct"
 
@@ -526,7 +526,7 @@ def test_336_file_path_reads_file_passes_bytes(tmp_path):
         "Process PDF",
         "process",
         [CapArg(
-            media_urn="media:file-path;textable;form=scalar",
+            media_urn="media:file-path;textable",
             required=True,
             sources=[
                 StdinSource("media:pdf"),
@@ -593,7 +593,7 @@ def test_337_file_path_without_stdin_passes_string(tmp_path):
         "Test",
         "test",
         [CapArg(
-            media_urn="media:file-path;textable;form=scalar",
+            media_urn="media:file-path;textable",
             required=True,
             sources=[PositionSource(0)]  # NO stdin source!
         )]
@@ -623,7 +623,7 @@ def test_338_file_path_via_cli_flag(tmp_path):
         "Process",
         "process",
         [CapArg(
-            media_urn="media:file-path;textable;form=scalar",
+            media_urn="media:file-path;textable",
             required=True,
             sources=[
                 StdinSource("media:pdf"),
@@ -659,7 +659,7 @@ def test_339_file_path_array_glob_expansion(tmp_path):
         "Batch",
         "batch",
         [CapArg(
-            media_urn="media:file-path;textable;form=list",
+            media_urn="media:file-path;textable;list",
             required=True,
             sources=[
                 StdinSource("media:"),
@@ -699,7 +699,7 @@ def test_340_file_not_found_clear_error():
         "Test",
         "test",
         [CapArg(
-            media_urn="media:file-path;textable;form=scalar",
+            media_urn="media:file-path;textable",
             required=True,
             sources=[
                 StdinSource("media:pdf"),
@@ -735,7 +735,7 @@ def test_341_stdin_precedence_over_file_path(tmp_path):
         "Test",
         "test",
         [CapArg(
-            media_urn="media:file-path;textable;form=scalar",
+            media_urn="media:file-path;textable",
             required=True,
             sources=[
                 StdinSource("media:"),  # First
@@ -769,7 +769,7 @@ def test_342_file_path_position_zero_reads_first_arg(tmp_path):
         "Test",
         "test",
         [CapArg(
-            media_urn="media:file-path;textable;form=scalar",
+            media_urn="media:file-path;textable",
             required=True,
             sources=[
                 StdinSource("media:"),
@@ -799,10 +799,10 @@ def test_343_non_file_path_args_unaffected():
         "Test",
         "test",
         [CapArg(
-            media_urn="media:model-spec;textable;form=scalar",  # NOT file-path
+            media_urn="media:model-spec;textable",  # NOT file-path
             required=True,
             sources=[
-                StdinSource("media:model-spec;textable;form=scalar"),
+                StdinSource("media:model-spec;textable"),
                 PositionSource(0),
             ]
         )]
@@ -830,7 +830,7 @@ def test_344_file_path_array_invalid_json_fails():
         "Test",
         "batch",
         [CapArg(
-            media_urn="media:file-path;textable;form=list",
+            media_urn="media:file-path;textable;list",
             required=True,
             sources=[
                 StdinSource("media:"),
@@ -868,7 +868,7 @@ def test_345_file_path_array_one_file_missing_fails_hard(tmp_path):
         "Test",
         "batch",
         [CapArg(
-            media_urn="media:file-path;textable;form=list",
+            media_urn="media:file-path;textable;list",
             required=True,
             sources=[
                 StdinSource("media:"),
@@ -912,7 +912,7 @@ def test_346_large_file_reads_successfully(tmp_path):
         "Test",
         "test",
         [CapArg(
-            media_urn="media:file-path;textable;form=scalar",
+            media_urn="media:file-path;textable",
             required=True,
             sources=[
                 StdinSource("media:"),
@@ -944,7 +944,7 @@ def test_347_empty_file_reads_as_empty_bytes(tmp_path):
         "Test",
         "test",
         [CapArg(
-            media_urn="media:file-path;textable;form=scalar",
+            media_urn="media:file-path;textable",
             required=True,
             sources=[
                 StdinSource("media:"),
@@ -976,7 +976,7 @@ def test_348_file_path_conversion_respects_source_order(tmp_path):
         "Test",
         "test",
         [CapArg(
-            media_urn="media:file-path;textable;form=scalar",
+            media_urn="media:file-path;textable",
             required=True,
             sources=[
                 PositionSource(0),            # First
@@ -1010,7 +1010,7 @@ def test_349_file_path_multiple_sources_fallback(tmp_path):
         "Test",
         "test",
         [CapArg(
-            media_urn="media:file-path;textable;form=scalar",
+            media_urn="media:file-path;textable",
             required=True,
             sources=[
                 CliFlagSource("--file"),     # First (not provided)
@@ -1045,7 +1045,7 @@ def test_350_full_cli_mode_with_file_path_integration(tmp_path):
         "Process PDF",
         "process",
         [CapArg(
-            media_urn="media:file-path;textable;form=scalar",
+            media_urn="media:file-path;textable",
             required=True,
             sources=[
                 StdinSource("media:pdf"),
@@ -1112,7 +1112,7 @@ def test_351_file_path_array_empty_array():
         "Test",
         "batch",
         [CapArg(
-            media_urn="media:file-path;textable;form=list",
+            media_urn="media:file-path;textable;list",
             required=False,  # Not required
             sources=[
                 StdinSource("media:"),
@@ -1152,7 +1152,7 @@ def test_352_file_permission_denied_clear_error(tmp_path):
         "Test",
         "test",
         [CapArg(
-            media_urn="media:file-path;textable;form=scalar",
+            media_urn="media:file-path;textable",
             required=True,
             sources=[
                 StdinSource("media:"),
@@ -1187,7 +1187,7 @@ def test_353_cbor_payload_format_consistency():
         "Test",
         "test",
         [CapArg(
-            media_urn="media:text;textable;form=scalar",
+            media_urn="media:text;textable",
             required=True,
             sources=[
                 StdinSource("media:text;textable"),
@@ -1208,7 +1208,7 @@ def test_353_cbor_payload_format_consistency():
 
     # Check the CapArgumentValue object
     arg = arguments[0]
-    assert arg.media_urn == "media:text;textable;form=scalar"
+    assert arg.media_urn == "media:text;textable"
     assert arg.value == b"test value"
 
 
@@ -1221,7 +1221,7 @@ def test_354_glob_pattern_no_matches_empty_array(tmp_path):
         "Test",
         "batch",
         [CapArg(
-            media_urn="media:file-path;textable;form=list",
+            media_urn="media:file-path;textable;list",
             required=True,
             sources=[
                 StdinSource("media:"),
@@ -1265,7 +1265,7 @@ def test_355_glob_pattern_skips_directories(tmp_path):
         "Test",
         "batch",
         [CapArg(
-            media_urn="media:file-path;textable;form=list",
+            media_urn="media:file-path;textable;list",
             required=True,
             sources=[
                 StdinSource("media:"),
@@ -1310,7 +1310,7 @@ def test_356_multiple_glob_patterns_combined(tmp_path):
         "Test",
         "batch",
         [CapArg(
-            media_urn="media:file-path;textable;form=list",
+            media_urn="media:file-path;textable;list",
             required=True,
             sources=[
                 StdinSource("media:"),
@@ -1360,7 +1360,7 @@ def test_357_symlinks_followed(tmp_path):
         "Test",
         "test",
         [CapArg(
-            media_urn="media:file-path;textable;form=scalar",
+            media_urn="media:file-path;textable",
             required=True,
             sources=[
                 StdinSource("media:"),
@@ -1394,7 +1394,7 @@ def test_358_binary_file_non_utf8(tmp_path):
         "Test",
         "test",
         [CapArg(
-            media_urn="media:file-path;textable;form=scalar",
+            media_urn="media:file-path;textable",
             required=True,
             sources=[
                 StdinSource("media:"),
@@ -1423,7 +1423,7 @@ def test_359_invalid_glob_pattern_fails():
         "Test",
         "batch",
         [CapArg(
-            media_urn="media:file-path;textable;form=list",
+            media_urn="media:file-path;textable;list",
             required=True,
             sources=[
                 StdinSource("media:"),
@@ -1462,7 +1462,7 @@ def test_360_extract_effective_payload_with_file_data(tmp_path):
         "Process",
         "process",
         [CapArg(
-            media_urn="media:file-path;textable;form=scalar",
+            media_urn="media:file-path;textable",
             required=True,
             sources=[
                 StdinSource("media:pdf"),
@@ -1504,7 +1504,7 @@ def test_361_cli_mode_file_path(tmp_path):
         "Process",
         "process",
         [CapArg(
-            media_urn="media:file-path;textable;form=scalar",
+            media_urn="media:file-path;textable",
             required=True,
             sources=[
                 StdinSource("media:pdf"),
@@ -1677,7 +1677,7 @@ def test_364_cbor_mode_file_path(tmp_path):
     # Build CBOR arguments with file-path URN
     from capns.cap.caller import CapArgumentValue
     args = [CapArgumentValue(
-        media_urn="media:file-path;textable;form=scalar",
+        media_urn="media:file-path;textable",
         value=str(test_file).encode('utf-8'),
     )]
     payload = cbor2.dumps([
@@ -1699,7 +1699,7 @@ def test_364_cbor_mode_file_path(tmp_path):
     media_urn = arg_map.get("media_urn")
     value = arg_map.get("value")
 
-    assert media_urn == "media:file-path;textable;form=scalar", "Expected media:file-path URN"
+    assert media_urn == "media:file-path;textable", "Expected media:file-path URN"
     assert value == str(test_file).encode('utf-8'), "Expected file path as value"
 
 

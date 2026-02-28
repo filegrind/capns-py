@@ -56,10 +56,10 @@ def test_002_direction_specs_default_to_wildcard():
 
 # TEST003: Test that direction specs must match exactly, different in/out types don't match, wildcard matches any
 def test_003_direction_matching():
-    in_str = "media:textable;form=scalar"  # MEDIA_STRING
-    out_obj = "media:form=map;textable"  # MEDIA_OBJECT
+    in_str = "media:textable"  # MEDIA_STRING
+    out_obj = "media:record;textable"  # MEDIA_OBJECT
     in_bin = "media:"  # MEDIA_BINARY
-    out_int = "media:integer;textable;numeric;form=scalar"  # MEDIA_INTEGER
+    out_int = "media:integer;textable;numeric"  # MEDIA_INTEGER
 
     # Direction specs must match for caps to match
     cap1 = CapUrn.from_string(f'cap:in="{in_str}";op=test;out="{out_obj}"')
@@ -301,7 +301,7 @@ def test_019_missing_tags_as_wildcards():
 def test_020_specificity_calculation():
     # More tags in direction specs = higher specificity
     cap1 = CapUrn.from_string(f'cap:in="media:string";out="media:object";op=test')
-    cap2 = CapUrn.from_string(f'cap:in="media:textable;form=scalar";out="media:form=map;textable";op=test')
+    cap2 = CapUrn.from_string(f'cap:in="media:textable";out="media:record;textable";op=test')
     # cap2 has more MediaUrn tags, so it's more specific
     assert cap2.specificity() > cap1.specificity()
 
@@ -373,8 +373,8 @@ def test_024_directional_accepts():
     assert cap1.accepts(cap_wildcard)
 
     # Different direction specs: neither accepts the other
-    cap3 = CapUrn.from_string(f'cap:in="media:";out="media:form=map;textable";op=test')
-    cap4 = CapUrn.from_string(f'cap:in="media:textable;form=scalar";out="media:integer;textable;numeric;form=scalar";op=test')
+    cap3 = CapUrn.from_string(f'cap:in="media:";out="media:record;textable";op=test')
+    cap4 = CapUrn.from_string(f'cap:in="media:textable";out="media:integer;textable;numeric";op=test')
     assert not cap3.accepts(cap4)
     assert not cap4.accepts(cap3)
 
@@ -622,7 +622,7 @@ def test_047_matching_semantics_thumbnail_void_input():
 # TEST048: Matching semantics - wildcard direction matches anything
 def test_048_matching_semantics_wildcard_direction():
     cap = CapUrn.from_string("cap:in=*;out=*")
-    request = CapUrn.from_string(f'cap:ext=pdf;in="media:textable;form=scalar";op=generate;out="{MEDIA_OBJECT}"')
+    request = CapUrn.from_string(f'cap:ext=pdf;in="media:textable";op=generate;out="{MEDIA_OBJECT}"')
     assert cap.accepts(request), "Test 8: Wildcard direction should accept any direction"
 
 
@@ -637,9 +637,9 @@ def test_049_matching_semantics_cross_dimension():
 
 # TEST050: Matching semantics - direction mismatch prevents matching
 def test_050_matching_semantics_direction_mismatch():
-    # media:textable;form=scalar (string) has different tags than media: (wildcard)
+    # media:textable (string) has different tags than media: (wildcard)
     # Neither can provide input for the other (completely different marker tags)
-    cap = CapUrn.from_string(f'cap:in="media:textable;form=scalar";op=generate;out="{MEDIA_OBJECT}"')
+    cap = CapUrn.from_string(f'cap:in="media:textable";op=generate;out="{MEDIA_OBJECT}"')
     request = CapUrn.from_string(f'cap:in="media:";op=generate;out="{MEDIA_OBJECT}"')
     assert not cap.accepts(request), "Test 10: Direction mismatch should not accept"
 

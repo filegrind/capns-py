@@ -800,7 +800,7 @@ def find_stream(streams: List[Tuple[str, bytes]], media_urn: str) -> Optional[by
 
     Args:
         streams: List of (media_urn, bytes) tuples from collect_streams()
-        media_urn: Full media URN from cap arg definition (e.g., "media:model-spec;textable;form=scalar")
+        media_urn: Full media URN from cap arg definition (e.g., "media:model-spec;textable")
 
     Returns:
         Stream bytes if found, None otherwise

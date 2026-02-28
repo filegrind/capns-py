@@ -26,30 +26,30 @@ from tagged_urn import TaggedUrn, TaggedUrnBuilder, TaggedUrnError
 # Primitive types - URNs must match base.toml definitions
 # Media URN for void (no input/output) - no coercion tags
 MEDIA_VOID = "media:void"
-# Media URN for string type - textable (can become text), scalar (single value)
-MEDIA_STRING = "media:textable;form=scalar"
-# Media URN for integer type - textable, numeric (math ops valid), scalar
-MEDIA_INTEGER = "media:integer;textable;numeric;form=scalar"
-# Media URN for number type - textable, numeric, scalar (no primary type prefix)
-MEDIA_NUMBER = "media:textable;numeric;form=scalar"
+# Media URN for string type - textable (can become text), scalar by default (no list marker)
+MEDIA_STRING = "media:textable"
+# Media URN for integer type - textable, numeric (math ops valid), scalar by default
+MEDIA_INTEGER = "media:integer;textable;numeric"
+# Media URN for number type - textable, numeric, scalar by default (no primary type prefix)
+MEDIA_NUMBER = "media:textable;numeric"
 # Media URN for boolean type - uses "bool" not "boolean" per base.toml
-MEDIA_BOOLEAN = "media:bool;textable;form=scalar"
-# Media URN for JSON object type - textable (via JSON.stringify), form=map (key-value structure)
-MEDIA_OBJECT = "media:form=map;textable"
+MEDIA_BOOLEAN = "media:bool;textable"
+# Media URN for JSON object type - record (key-value structure), textable (via JSON.stringify)
+MEDIA_OBJECT = "media:record"
 # Media URN for binary data (wildcard - matches everything)
 MEDIA_BINARY = "media:"
 
 # Array types - URNs must match base.toml definitions
-# Media URN for string array type - textable, list (no primary type prefix)
-MEDIA_STRING_ARRAY = "media:textable;form=list"
-# Media URN for integer array type - textable, numeric, list (per base.toml:46)
-MEDIA_INTEGER_ARRAY = "media:integer;textable;numeric;form=list"
-# Media URN for number array type - textable, numeric, list (no primary type prefix)
-MEDIA_NUMBER_ARRAY = "media:textable;numeric;form=list"
-# Media URN for boolean array type - uses "bool" not "boolean" per base.toml
-MEDIA_BOOLEAN_ARRAY = "media:bool;textable;form=list"
-# Media URN for object array type - generic list (item type defined in schema)
-MEDIA_OBJECT_ARRAY = "media:form=list;textable"
+# Media URN for string array type - list marker, textable (no primary type prefix)
+MEDIA_STRING_ARRAY = "media:list;textable"
+# Media URN for integer array type - list marker, integer, numeric, textable (per base.toml:46)
+MEDIA_INTEGER_ARRAY = "media:integer;list;textable;numeric"
+# Media URN for number array type - list marker, numeric, textable (no primary type prefix)
+MEDIA_NUMBER_ARRAY = "media:list;textable;numeric"
+# Media URN for boolean array type - list marker, bool, textable (uses "bool" not "boolean" per base.toml)
+MEDIA_BOOLEAN_ARRAY = "media:bool;list;textable"
+# Media URN for object array type - list marker, record (each item has structure)
+MEDIA_OBJECT_ARRAY = "media:list;record"
 
 # Semantic media types for specialized content
 # Media URN for PNG image data
@@ -64,12 +64,6 @@ MEDIA_VIDEO = "media:video"
 MEDIA_AUDIO_SPEECH = "media:audio;wav;speech"
 # Media URN for thumbnail image output
 MEDIA_IMAGE_THUMBNAIL = "media:image;png;thumbnail"
-
-# Collection types for folder hierarchies
-# Media URN for a collection (folder with nested structure as form=map)
-MEDIA_COLLECTION = "media:collection;textable;form=map"
-# Media URN for a flat collection (folder contents as form=list)
-MEDIA_COLLECTION_LIST = "media:collection;textable;form=list"
 
 # Document types (PRIMARY naming - type IS the format)
 # Media URN for PDF documents
@@ -91,61 +85,61 @@ MEDIA_HTML = "media:html;textable"
 # Media URN for XML documents
 MEDIA_XML = "media:xml;textable"
 # Media URN for JSON data
-MEDIA_JSON = "media:json;textable;form=map"
+MEDIA_JSON = "media:json;record;textable"
 # Media URN for JSON with schema constraint (input for structured queries) - matches CATALOG
-MEDIA_JSON_SCHEMA = "media:json;json-schema;textable;form=map"
+MEDIA_JSON_SCHEMA = "media:json;json-schema;record;textable"
 # Media URN for YAML data
-MEDIA_YAML = "media:yaml;textable;form=map"
+MEDIA_YAML = "media:record;textable;yaml"
 
 # File path types - for arguments that represent filesystem paths
 # Media URN for a single file path - textable, scalar, and marked as a file-path for special handling
-MEDIA_FILE_PATH = "media:file-path;textable;form=scalar"
+MEDIA_FILE_PATH = "media:file-path;textable"
 # Media URN for an array of file paths - textable, list (per file-path.toml)
-MEDIA_FILE_PATH_ARRAY = "media:file-path;textable;form=list"
+MEDIA_FILE_PATH_ARRAY = "media:file-path;list;textable"
 
 # Semantic text input types - distinguished by their purpose/context
 # Media URN for frontmatter text (book metadata)
-MEDIA_FRONTMATTER_TEXT = "media:frontmatter;textable;form=scalar"
+MEDIA_FRONTMATTER_TEXT = "media:frontmatter;textable"
 # Media URN for model spec (provider:model format, HuggingFace name, etc.)
-MEDIA_MODEL_SPEC = "media:model-spec;textable;form=scalar"
+MEDIA_MODEL_SPEC = "media:model-spec;textable"
 # Media URN for MLX model path
-MEDIA_MLX_MODEL_PATH = "media:mlx-model-path;textable;form=scalar"
+MEDIA_MLX_MODEL_PATH = "media:mlx-model-path;textable"
 # Media URN for model repository (input for list-models) - matches CATALOG
-MEDIA_MODEL_REPO = "media:model-repo;textable;form=map"
+MEDIA_MODEL_REPO = "media:model-repo;record;textable"
 
-# CAPNS output types - all form=map structures (JSON objects)
+# CAPNS output types - all record structures (JSON objects)
 # Media URN for model dimension output - matches CATALOG
-MEDIA_MODEL_DIM = "media:model-dim;integer;textable;numeric;form=scalar"
-# Media URN for model download output - textable, form=map
-MEDIA_DOWNLOAD_OUTPUT = "media:download-result;textable;form=map"
-# Media URN for model list output - textable, form=map
-MEDIA_LIST_OUTPUT = "media:model-list;textable;form=map"
-# Media URN for model status output - textable, form=map
-MEDIA_STATUS_OUTPUT = "media:model-status;textable;form=map"
-# Media URN for model contents output - textable, form=map
-MEDIA_CONTENTS_OUTPUT = "media:model-contents;textable;form=map"
-# Media URN for model availability output - textable, form=map
-MEDIA_AVAILABILITY_OUTPUT = "media:model-availability;textable;form=map"
-# Media URN for model path output - textable, form=map
-MEDIA_PATH_OUTPUT = "media:model-path;textable;form=map"
-# Media URN for embedding vector output - textable, form=map
-MEDIA_EMBEDDING_VECTOR = "media:embedding-vector;textable;form=map"
-# Media URN for LLM inference output - textable, form=map
-MEDIA_LLM_INFERENCE_OUTPUT = "media:generated-text;textable;form=map"
-# Media URN for extracted metadata - textable, form=map
-MEDIA_FILE_METADATA = "media:file-metadata;textable;form=map"
-# Media URN for extracted outline - textable, form=map
-MEDIA_DOCUMENT_OUTLINE = "media:document-outline;textable;form=map"
-# Media URN for disbound page - textable, form=list (array of page objects)
-MEDIA_DISBOUND_PAGE = "media:disbound-page;textable;form=list"
-# Media URN for caption output - textable, form=map
-MEDIA_CAPTION_OUTPUT = "media:image-caption;textable;form=map"
-# Media URN for transcription output - textable, form=map
-MEDIA_TRANSCRIPTION_OUTPUT = "media:transcription;textable;form=map"
+MEDIA_MODEL_DIM = "media:integer;model-dim;numeric;textable"
+# Media URN for model download output - record structure
+MEDIA_DOWNLOAD_OUTPUT = "media:download-result;record;textable"
+# Media URN for model list output - record structure
+MEDIA_LIST_OUTPUT = "media:model-list;record;textable"
+# Media URN for model status output - record structure
+MEDIA_STATUS_OUTPUT = "media:model-status;record;textable"
+# Media URN for model contents output - record structure
+MEDIA_CONTENTS_OUTPUT = "media:model-contents;record;textable"
+# Media URN for model availability output - record structure
+MEDIA_AVAILABILITY_OUTPUT = "media:model-availability;record;textable"
+# Media URN for model path output - record structure
+MEDIA_PATH_OUTPUT = "media:model-path;record;textable"
+# Media URN for embedding vector output - record structure
+MEDIA_EMBEDDING_VECTOR = "media:embedding-vector;record;textable"
+# Media URN for LLM inference output - record structure
+MEDIA_LLM_INFERENCE_OUTPUT = "media:generated-text;record;textable"
+# Media URN for extracted metadata - record structure
+MEDIA_FILE_METADATA = "media:file-metadata;record;textable"
+# Media URN for extracted outline - record structure
+MEDIA_DOCUMENT_OUTLINE = "media:document-outline;record;textable"
+# Media URN for disbound page - list (array of page objects)
+MEDIA_DISBOUND_PAGE = "media:disbound-page;list;textable"
+# Media URN for image description output - textable (renamed from MEDIA_CAPTION_OUTPUT)
+MEDIA_IMAGE_DESCRIPTION = "media:image-description;textable"
+# Media URN for transcription output - record structure
+MEDIA_TRANSCRIPTION_OUTPUT = "media:record;textable;transcription"
 # Media URN for decision output (bit choice) - matches CATALOG
-MEDIA_DECISION = "media:decision;bool;textable;form=scalar"
+MEDIA_DECISION = "media:bool;decision;textable"
 # Media URN for decision array output (bit choices) - matches CATALOG
-MEDIA_DECISION_ARRAY = "media:decision;bool;textable;form=list"
+MEDIA_DECISION_ARRAY = "media:bool;decision;list;textable"
 
 
 # Helper functions to build media URNs
@@ -269,27 +263,39 @@ class MediaUrn:
         """
         return self._urn.specificity()
 
+    def has_marker_tag(self, tag_name: str) -> bool:
+        """Check if a marker tag is present (has wildcard value).
+
+        Marker tags are tags with wildcard values (*) that indicate
+        boolean-like properties of the media type.
+        """
+        return self._urn.tags.get(tag_name) == "*"
+
     def is_binary(self) -> bool:
         """Check if this represents binary (non-text) data.
         Returns True if the "textable" marker tag is NOT present."""
         tag_val = self._urn.get_tag("textable")
         return tag_val is None
 
-    def is_map(self) -> bool:
-        """Check if this media URN represents map/object structure (form=map)"""
-        return self._urn.has_tag("form", "map")
-
     def is_scalar(self) -> bool:
-        """Check if this media URN represents a single value (form=scalar)"""
-        return self._urn.has_tag("form", "scalar")
+        """Check if this media URN represents a single value (not a list).
+        Returns True if the "list" marker tag is NOT present."""
+        return not self.has_marker_tag("list")
 
     def is_list(self) -> bool:
-        """Check if this media URN represents a list/array (form=list)"""
-        return self._urn.has_tag("form", "list")
+        """Check if this media URN represents a list/array.
+        Returns True if the "list" marker tag is present."""
+        return self.has_marker_tag("list")
 
-    def is_structured(self) -> bool:
-        """Check if this media URN represents structured data (map or list)"""
-        return self.is_map() or self.is_list()
+    def is_record(self) -> bool:
+        """Check if this media URN has internal record structure (key-value pairs).
+        Returns True if the "record" marker tag is present."""
+        return self.has_marker_tag("record")
+
+    def is_opaque(self) -> bool:
+        """Check if this media URN has no recognized internal structure.
+        Returns True if the "record" marker tag is NOT present."""
+        return not self.has_marker_tag("record")
 
     def is_json(self) -> bool:
         """Check if this media URN represents JSON data (json marker tag)"""
@@ -338,27 +344,21 @@ class MediaUrn:
 
     def is_file_path(self) -> bool:
         """Check if this represents a single file path type (not array).
-        Returns true if the "file-path" marker tag is present AND NOT form=list.
+        Returns true if the "file-path" marker tag is present AND NOT list.
         """
-        return self._urn.tags.get("file-path") == "*" and not self.is_list()
+        return self.has_marker_tag("file-path") and self.is_scalar()
 
     def is_file_path_array(self) -> bool:
         """Check if this represents a file path array type.
-        Returns true if the "file-path" marker tag is present AND form=list.
+        Returns true if the "file-path" marker tag is present AND list.
         """
-        return self._urn.tags.get("file-path") == "*" and self.is_list()
+        return self.has_marker_tag("file-path") and self.is_list()
 
     def is_any_file_path(self) -> bool:
         """Check if this represents any file path type (single or array).
         Returns true if the "file-path" marker tag is present.
         """
-        return self._urn.tags.get("file-path") == "*"
-
-    def is_collection(self) -> bool:
-        """Check if this represents a collection type (folder structure).
-        Returns true if the "collection" marker tag is present.
-        """
-        return self._urn.tags.get("collection") == "*"
+        return self.has_marker_tag("file-path")
 
     def extension(self) -> Optional[str]:
         """Get the extension tag value if present"""

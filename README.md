@@ -51,10 +51,10 @@ cap = CapUrnBuilder() \
     .tag("ext", "pdf") \
     .build()
 
-print(cap.to_string())  # cap:ext=pdf;in="media:textable;form=scalar";op=generate;out="media:form=map;textable"
+print(cap.to_string())  # cap:ext=pdf;in="media:textable";op=generate;out="media:record;textable"
 
 # Matching semantics
-request = CapUrn.from_string('cap:in="media:textable;form=scalar";out="media:form=map;textable";op=generate')
+request = CapUrn.from_string('cap:in="media:textable";out="media:record;textable";op=generate')
 print(cap.accepts(request))  # True
 
 # Specificity
@@ -129,7 +129,7 @@ media:<markers>[;key=value]*
 
 Examples:
 - `media:bytes` - Binary data
-- `media:textable;form=scalar` - Text, single value
+- `media:textable` - Text, single value
 - `media:pdf;bytes` - PDF document (binary)
 
 ### CapUrn

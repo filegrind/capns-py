@@ -52,7 +52,7 @@ class CapArgumentValue:
         """Create a new CapArgumentValue
 
         Args:
-            media_urn: Semantic identifier (e.g., "media:model-spec;textable;form=scalar")
+            media_urn: Semantic identifier (e.g., "media:model-spec;textable")
             value: Value bytes (UTF-8 for text, raw for binary)
         """
         self.media_urn = media_urn

@@ -563,21 +563,21 @@ def test_133_cap_block_graph_integration():
     # Provider: binary -> str
     provider_host = MockCapSet("provider")
     provider_cap = Cap(
-        urn=CapUrn.from_string('cap:in="media:";op=extract;out="media:textable;form=scalar"'),
+        urn=CapUrn.from_string('cap:in="media:";op=extract;out="media:textable"'),
         title="Provider Text Extractor",
         command="extract"
     )
-    provider_cap.output = CapOutput("media:textable;form=scalar", "output")
+    provider_cap.output = CapOutput("media:textable", "output")
     provider_registry.register_cap_set("provider", provider_host, [provider_cap])
 
     # Plugin: str -> obj
     plugin_host = MockCapSet("plugin")
     plugin_cap = Cap(
-        urn=CapUrn.from_string('cap:in="media:textable;form=scalar";op=parse;out="media:form=map;textable"'),
+        urn=CapUrn.from_string('cap:in="media:textable";op=parse;out="media:record;textable"'),
         title="Plugin JSON Parser",
         command="parse"
     )
-    plugin_cap.output = CapOutput("media:form=map;textable", "output")
+    plugin_cap.output = CapOutput("media:record;textable", "output")
     plugin_registry.register_cap_set("plugin", plugin_host, [plugin_cap])
 
     cube = CapBlock()
@@ -590,19 +590,19 @@ def test_133_cap_block_graph_integration():
     # Check nodes (exact spec strings - alphabetically canonicalized)
     nodes = graph.get_nodes()
     assert 'media:' in nodes
-    assert 'media:textable;form=scalar' in nodes  # Canonicalized (alphabetical)
-    assert 'media:form=map;textable' in nodes  # Canonicalized (alphabetical)
+    assert 'media:textable' in nodes  # Canonicalized (alphabetical)
+    assert 'media:record;textable' in nodes  # Canonicalized (alphabetical)
 
     # Check edges
     edges = graph.get_edges()
     assert len(edges) == 2
 
     # Check that we have appropriate edges
-    # Edge 1: media: (base binary) -> media:textable;form=scalar
-    # Edge 2: media:textable;form=scalar -> media:form=map;textable
+    # Edge 1: media: (base binary) -> media:textable
+    # Edge 2: media:textable -> media:record;textable
     edge_pairs = [(e.from_spec, e.to_spec) for e in edges]
-    assert any(from_spec == 'media:' and ('scalar' in to_spec or 'textable' in to_spec) for from_spec, to_spec in edge_pairs)
-    assert any(('scalar' in from_spec or 'textable' in from_spec) and 'map' in to_spec for from_spec, to_spec in edge_pairs)
+    assert any(from_spec == 'media:' and 'textable' in to_spec for from_spec, to_spec in edge_pairs)
+    assert any('textable' in from_spec and 'record' in to_spec for from_spec, to_spec in edge_pairs)
 
 
 # TEST574: CapBlock::remove_registry removes by name, returns the registry object; None for missing

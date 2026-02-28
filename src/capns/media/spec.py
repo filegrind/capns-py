@@ -414,30 +414,36 @@ class ResolvedMediaSpec:
         """
         return self._parse_media_urn().is_binary()
 
-    def is_map(self) -> bool:
-        """Check if this represents a map/object structure (form=map).
-        This indicates a key-value structure, regardless of representation format.
+    def is_record(self) -> bool:
+        """Check if this represents a record structure (key-value pairs).
+        This indicates internal structure with named fields, regardless of representation format.
         """
-        return self._parse_media_urn().is_map()
+        return self._parse_media_urn().is_record()
+
+    def is_opaque(self) -> bool:
+        """Check if this has no recognized internal structure.
+        Returns True if the "record" marker tag is NOT present.
+        """
+        return self._parse_media_urn().is_opaque()
 
     def is_scalar(self) -> bool:
-        """Check if this represents a scalar value (form=scalar).
+        """Check if this represents a scalar value (single item, not a list).
         This indicates a single value, not a collection.
         """
         return self._parse_media_urn().is_scalar()
 
     def is_list(self) -> bool:
-        """Check if this represents a list/array structure (form=list).
-        This indicates an ordered collection of values.
+        """Check if this represents a list/array structure.
+        This indicates an ordered collection of values (zero or more items).
         """
         return self._parse_media_urn().is_list()
 
     def is_structured(self) -> bool:
-        """Check if this represents structured data (map or list).
-        Structured data can be serialized as JSON when transmitted as text.
+        """Check if this represents structured data (record or list).
+        Structured data has recognized internal organization.
         Note: This does NOT check for the explicit `json` tag - use is_json() for that.
         """
-        return self.is_map() or self.is_list()
+        return self.is_record() or self.is_list()
 
     def is_json(self) -> bool:
         """Check if this represents JSON representation specifically.
@@ -535,7 +541,7 @@ async def resolve_media_urn(
     4. If none resolve → Error
 
     Args:
-        media_urn: The media URN to resolve (e.g., "media:textable;form=scalar")
+        media_urn: The media URN to resolve (e.g., "media:textable")
         media_specs: Optional media_specs array from the cap definition
         registry: The MediaUrnRegistry for cache and remote lookups
 

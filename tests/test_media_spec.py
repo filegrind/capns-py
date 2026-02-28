@@ -45,7 +45,7 @@ def create_media_specs(specs):
 @pytest.mark.asyncio
 async def test_088_resolve_from_registry_str():
     registry = await create_test_registry()
-    resolved = await resolve_media_urn("media:textable;form=scalar", None, registry)
+    resolved = await resolve_media_urn("media:textable", None, registry)
     assert resolved.media_type == "text/plain"
     # Registry provides the full spec including profile
     assert resolved.profile_uri is not None
@@ -55,7 +55,7 @@ async def test_088_resolve_from_registry_str():
 @pytest.mark.asyncio
 async def test_089_resolve_from_registry_obj():
     registry = await create_test_registry()
-    resolved = await resolve_media_urn("media:form=map;textable", None, registry)
+    resolved = await resolve_media_urn("media:record;textable", None, registry)
     assert resolved.media_type == "application/json"
 
 
@@ -119,7 +119,7 @@ async def test_092_resolve_custom_with_schema():
     }
     media_specs = create_media_specs([
         MediaSpecDef(
-            urn="media:output-spec;json;form=map",
+            urn="media:output-spec;json;record",
             media_type="application/json",
             title="Output Spec",
             profile_uri="https://example.com/schema/output",
@@ -131,8 +131,8 @@ async def test_092_resolve_custom_with_schema():
         )
     ])
 
-    resolved = await resolve_media_urn("media:output-spec;json;form=map", media_specs, registry)
-    assert resolved.media_urn == "media:output-spec;json;form=map"
+    resolved = await resolve_media_urn("media:output-spec;json;record", media_specs, registry)
+    assert resolved.media_urn == "media:output-spec;json;record"
     assert resolved.media_type == "application/json"
     assert resolved.profile_uri == "https://example.com/schema/output"
     assert resolved.schema == schema
@@ -155,7 +155,7 @@ async def test_094_local_overrides_registry():
     # Custom definition in media_specs takes precedence over registry
     media_specs = create_media_specs([
         MediaSpecDef(
-            urn="media:textable;form=scalar",
+            urn="media:textable",
             media_type="application/json",  # Override: normally text/plain
             title="Custom String",
             profile_uri="https://custom.example.com/str",
@@ -167,7 +167,7 @@ async def test_094_local_overrides_registry():
         )
     ])
 
-    resolved = await resolve_media_urn("media:textable;form=scalar", media_specs, registry)
+    resolved = await resolve_media_urn("media:textable", media_specs, registry)
     # Custom definition used, not registry
     assert resolved.media_type == "application/json"
     assert resolved.profile_uri == "https://custom.example.com/str"
@@ -277,14 +277,14 @@ def test_099_resolved_is_binary():
         extensions=[],
     )
     assert resolved.is_binary()
-    assert not resolved.is_map()
+    assert not resolved.is_record()
     assert not resolved.is_json()
 
 
-# TEST100: Test ResolvedMediaSpec is_map returns true for form=map media URN
-def test_100_resolved_is_map():
+# TEST100: Test ResolvedMediaSpec is_record returns true for record marker tag media URN
+def test_100_resolved_is_record():
     resolved = ResolvedMediaSpec(
-        media_urn="media:textable;form=map",
+        media_urn="media:record;textable",
         media_type="application/json",
         profile_uri=None,
         schema=None,
@@ -294,16 +294,16 @@ def test_100_resolved_is_map():
         metadata=None,
         extensions=[],
     )
-    assert resolved.is_map()
+    assert resolved.is_record()
     assert not resolved.is_binary()
-    assert not resolved.is_scalar()
+    assert resolved.is_scalar()  # record without list marker is scalar cardinality
     assert not resolved.is_list()
 
 
-# TEST101: Test ResolvedMediaSpec is_scalar returns true for form=scalar media URN
+# TEST101: Test ResolvedMediaSpec is_scalar returns true when list marker tag is NOT present
 def test_101_resolved_is_scalar():
     resolved = ResolvedMediaSpec(
-        media_urn="media:textable;form=scalar",
+        media_urn="media:textable",
         media_type="text/plain",
         profile_uri=None,
         schema=None,
@@ -314,14 +314,14 @@ def test_101_resolved_is_scalar():
         extensions=[],
     )
     assert resolved.is_scalar()
-    assert not resolved.is_map()
+    assert not resolved.is_record()
     assert not resolved.is_list()
 
 
-# TEST102: Test ResolvedMediaSpec is_list returns true for form=list media URN
+# TEST102: Test ResolvedMediaSpec is_list returns true for list marker tag media URN
 def test_102_resolved_is_list():
     resolved = ResolvedMediaSpec(
-        media_urn="media:textable;form=list",
+        media_urn="media:list;textable",
         media_type="application/json",
         profile_uri=None,
         schema=None,
@@ -332,14 +332,14 @@ def test_102_resolved_is_list():
         extensions=[],
     )
     assert resolved.is_list()
-    assert not resolved.is_map()
+    assert not resolved.is_record()
     assert not resolved.is_scalar()
 
 
-# TEST103: Test ResolvedMediaSpec is_json returns true when json tag is present
+# TEST103: Test ResolvedMediaSpec is_json returns true when json marker tag is present
 def test_103_resolved_is_json():
     resolved = ResolvedMediaSpec(
-        media_urn="media:json;textable;form=map",
+        media_urn="media:json;record;textable",
         media_type="application/json",
         profile_uri=None,
         schema=None,
@@ -350,7 +350,7 @@ def test_103_resolved_is_json():
         extensions=[],
     )
     assert resolved.is_json()
-    assert resolved.is_map()
+    assert resolved.is_record()
     assert not resolved.is_binary()
 
 

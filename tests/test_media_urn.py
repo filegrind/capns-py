@@ -29,8 +29,6 @@ from capns import (
     MEDIA_IMAGE_THUMBNAIL,
     MEDIA_FILE_PATH,
     MEDIA_FILE_PATH_ARRAY,
-    MEDIA_COLLECTION,
-    MEDIA_COLLECTION_LIST,
     MEDIA_DECISION,
     MEDIA_DECISION_ARRAY,
     binary_media_urn_for_ext,
@@ -60,21 +58,21 @@ def test_061_is_binary():
     assert not string_urn.is_binary()
 
 
-# TEST062: Test is_map returns true when form=map tag is present indicating key-value structure
-def test_062_is_map():
+# TEST062: Test is_record returns true when record marker tag is present indicating key-value structure
+def test_062_is_record():
     obj_urn = MediaUrn.from_string(MEDIA_OBJECT)
-    assert obj_urn.is_map()
+    assert obj_urn.is_record()
 
-    # JSON is also a map
+    # JSON is also a record
     json_urn = MediaUrn.from_string(MEDIA_JSON)
-    assert json_urn.is_map()
+    assert json_urn.is_record()
 
-    # String is not a map
+    # String is not a record
     string_urn = MediaUrn.from_string(MEDIA_STRING)
-    assert not string_urn.is_map()
+    assert not string_urn.is_record()
 
 
-# TEST063: Test is_scalar returns true when form=scalar tag is present indicating single value
+# TEST063: Test is_scalar returns true when list marker tag is NOT present indicating single value
 def test_063_is_scalar():
     string_urn = MediaUrn.from_string(MEDIA_STRING)
     assert string_urn.is_scalar()
@@ -82,12 +80,12 @@ def test_063_is_scalar():
     int_urn = MediaUrn.from_string(MEDIA_INTEGER)
     assert int_urn.is_scalar()
 
-    # Object is not scalar
-    obj_urn = MediaUrn.from_string(MEDIA_OBJECT)
-    assert not obj_urn.is_scalar()
+    # Arrays are not scalar
+    array_urn = MediaUrn.from_string(MEDIA_STRING_ARRAY)
+    assert not array_urn.is_scalar()
 
 
-# TEST064: Test is_list returns true when form=list tag is present indicating ordered collection
+# TEST064: Test is_list returns true when list marker tag is present indicating ordered collection
 def test_064_is_list():
     list_urn = MediaUrn.from_string(MEDIA_STRING_ARRAY)
     assert list_urn.is_list()
@@ -100,21 +98,27 @@ def test_064_is_list():
     assert not scalar_urn.is_list()
 
 
-# TEST065: Test is_structured returns true for map or list forms indicating structured data types
-def test_065_is_structured():
+# TEST065: Test is_record and is_list for structure checking (is_structured removed from MediaUrn)
+def test_065_record_and_list():
+    # Record has internal structure
     obj_urn = MediaUrn.from_string(MEDIA_OBJECT)
-    assert obj_urn.is_structured()
+    assert obj_urn.is_record()
+    assert not obj_urn.is_opaque()
 
+    # List is a collection
     list_urn = MediaUrn.from_string(MEDIA_STRING_ARRAY)
-    assert list_urn.is_structured()
+    assert list_urn.is_list()
+    assert not list_urn.is_scalar()
 
-    # Scalar is not structured
+    # Opaque scalar has no structure
     scalar_urn = MediaUrn.from_string(MEDIA_STRING)
-    assert not scalar_urn.is_structured()
+    assert scalar_urn.is_opaque()
+    assert not scalar_urn.is_record()
 
-    # Binary is not structured
+    # Binary wildcard is opaque
     bin_urn = MediaUrn.from_string(MEDIA_BINARY)
-    assert not bin_urn.is_structured()
+    assert bin_urn.is_opaque()
+    assert not bin_urn.is_record()
 
 
 # TEST066: Test is_json returns true only when json marker tag is present for JSON representation
@@ -215,8 +219,8 @@ def test_074_media_urn_matching():
 # TEST075: Test matching with implicit wildcards where handlers with fewer tags can handle more requests
 def test_075_matching():
     generic_handler = MediaUrn.from_string("media:textable")
-    specific_scalar_request = MediaUrn.from_string("media:textable;form=scalar")
-    specific_list_request = MediaUrn.from_string("media:textable;form=list")
+    specific_scalar_request = MediaUrn.from_string("media:textable")
+    specific_list_request = MediaUrn.from_string("media:textable;list")
 
     assert specific_scalar_request.conforms_to(generic_handler)
     assert specific_list_request.conforms_to(generic_handler)
@@ -246,7 +250,7 @@ def test_304_media_availability_output_constant():
     urn = MediaUrn.from_string(MEDIA_AVAILABILITY_OUTPUT)
     assert urn is not None
     assert urn.is_text()
-    assert urn.is_map()
+    assert urn.is_record()
 
 
 # TEST305: Test MEDIA_PATH_OUTPUT constant parses as valid media URN with correct tags
@@ -254,7 +258,7 @@ def test_305_media_path_output_constant():
     urn = MediaUrn.from_string(MEDIA_PATH_OUTPUT)
     assert urn is not None
     assert urn.is_text()
-    assert urn.is_map()
+    assert urn.is_record()
 
 
 # TEST306: Test MEDIA_AVAILABILITY_OUTPUT and MEDIA_PATH_OUTPUT are distinct URNs
@@ -350,15 +354,6 @@ def test_553_is_any_file_path():
     assert not MediaUrn.from_string(MEDIA_STRING_ARRAY).is_any_file_path()
 
 
-# TEST554: is_collection returns true when collection marker tag is present
-def test_554_is_collection():
-    assert MediaUrn.from_string(MEDIA_COLLECTION).is_collection()
-    assert MediaUrn.from_string(MEDIA_COLLECTION_LIST).is_collection()
-    # Non-collection types
-    assert not MediaUrn.from_string(MEDIA_OBJECT).is_collection()
-    assert not MediaUrn.from_string(MEDIA_STRING_ARRAY).is_collection()
-
-
 # TEST555: with_tag adds a tag and without_tag removes it
 def test_555_with_tag_and_without_tag():
     urn = MediaUrn.from_string("media:string")
@@ -412,12 +407,12 @@ def test_558_predicate_constant_consistency():
     assert bool_urn.is_scalar()
     assert not bool_urn.is_numeric()
 
-    # MEDIA_JSON must be json, text, map, structured, NOT binary
+    # MEDIA_JSON must be json, text, record, scalar (single object), NOT binary
     json_urn = MediaUrn.from_string(MEDIA_JSON)
     assert json_urn.is_json()
     assert json_urn.is_text()
-    assert json_urn.is_map()
-    assert json_urn.is_structured()
+    assert json_urn.is_record()
+    assert json_urn.is_scalar()  # JSON object is a single value (scalar cardinality)
     assert not json_urn.is_binary()
     assert not json_urn.is_list()
 

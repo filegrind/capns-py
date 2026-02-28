@@ -45,8 +45,8 @@ def test_136_cache_key_generation():
     registry = CapRegistry.new_for_test()
 
     # Use URNs with required in/out (new media URN format)
-    urn1 = 'cap:in="media:void";op=extract;out="media:form=map;textable";target=metadata'
-    urn2 = 'cap:in="media:void";op=extract;out="media:form=map;textable";target=metadata'
+    urn1 = 'cap:in="media:void";op=extract;out="media:record;textable";target=metadata'
+    urn2 = 'cap:in="media:void";op=extract;out="media:record;textable";target=metadata'
     urn3 = 'cap:in="media:void";op=different;out="media:object"'
 
     key1 = registry._cache_key(urn1)
@@ -113,7 +113,7 @@ def test_137_parse_registry_json():
 def test_138_parse_registry_json_with_stdin():
     """Test parsing cap JSON with stdin args"""
     json_str = '''{
-        "urn": "cap:in=\\"media:pdf\\";op=extract_metadata;out=\\"media:file-metadata;textable;form=map\\"",
+        "urn": "cap:in=\\"media:pdf\\";op=extract_metadata;out=\\"media:file-metadata;textable;record\\"",
         "command": "extract-metadata",
         "title": "Extract Metadata",
         "args": [

@@ -140,7 +140,7 @@ def test_162_stdin_source_debug_format():
 
 # TEST274: Test CapArgumentValue::new stores media_urn and raw byte value
 def test_274_cap_argument_value_new():
-    media_urn = "media:model-spec;textable;form=scalar"
+    media_urn = "media:model-spec;textable"
     value = b"gpt-4o"
 
     arg = CapArgumentValue(media_urn, value)
@@ -284,7 +284,7 @@ def test_cap_caller_validate_arguments_success():
     cap.add_arg(arg_def)
 
     cap_set = MockCapSet(response_text='{"result": "success"}')
-    caller = CapCaller("cap:in=\"media:void\";op=test;out=\"media:form=map;textable\"", cap_set, cap)
+    caller = CapCaller("cap:in=\"media:void\";op=test;out=\"media:record;textable\"", cap_set, cap)
 
     # Valid arguments
     arguments = [CapArgumentValue.from_str(MEDIA_STRING, "test value")]
@@ -301,7 +301,7 @@ def test_cap_caller_validate_arguments_missing_required():
     cap.add_arg(arg_def)
 
     cap_set = MockCapSet()
-    caller = CapCaller("cap:in=\"media:void\";op=test;out=\"media:form=map;textable\"", cap_set, cap)
+    caller = CapCaller("cap:in=\"media:void\";op=test;out=\"media:record;textable\"", cap_set, cap)
 
     # Missing required argument
     with pytest.raises(ValueError, match="Missing required argument"):
@@ -318,7 +318,7 @@ def test_cap_caller_validate_arguments_unknown():
     cap.add_arg(arg_def)
 
     cap_set = MockCapSet()
-    caller = CapCaller("cap:in=\"media:void\";op=test;out=\"media:form=map;textable\"", cap_set, cap)
+    caller = CapCaller("cap:in=\"media:void\";op=test;out=\"media:record;textable\"", cap_set, cap)
 
     # Unknown argument
     unknown_arg = CapArgumentValue.from_str("media:unknown", "value")
@@ -338,7 +338,7 @@ def test_cap_caller_get_positional_arg_positions():
     cap.add_arg(arg2)
 
     cap_set = MockCapSet()
-    caller = CapCaller("cap:in=\"media:void\";op=test;out=\"media:form=map;textable\"", cap_set, cap)
+    caller = CapCaller("cap:in=\"media:void\";op=test;out=\"media:record;textable\"", cap_set, cap)
 
     positions = caller.get_positional_arg_positions()
     assert positions == {
